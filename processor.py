@@ -3,16 +3,14 @@ Medical Claim Adjudication Processor
 Contains all the core business logic for claim processing
 """
 import json
-import base64
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, List, Any, Optional
 import os
 import re
 from openai import AzureOpenAI
-import base64
 from PIL import Image
-import pdfplumber
 import pytesseract
+import traceback
 from PIL import Image
 import fitz
 import uuid
@@ -184,10 +182,17 @@ class ClaimProcessor:
     
     # ==================== LLM EXTRACTION ====================
     
-    def extract_claim_data(self, document_text: str, claim_date: str = None) -> Dict[str, Any]:
-        """Extract structured claim data from document text using AI model"""
+    def extract_claim_data(self, document_text: str, claim_date: str = None, 
+                      doc_type: str = None) -> Dict[str, Any]:
+        """
+        Extract structured claim data from document text using AI model.
         
-        print(f"[EXTRACT_CLAIM_DATA] Starting extraction, text length: {len(document_text) if document_text else 0}")
+        Args:
+            document_text: Extracted text from document
+            claim_date: Claim submission date
+            doc_type: Type of document (prescription, medical_bill, etc.)
+        """
+        print(f"[EXTRACT_CLAIM_DATA] Starting extraction for {doc_type}, text length: {len(document_text) if document_text else 0}")
         
         # Validate input
         if not isinstance(document_text, str):
@@ -201,10 +206,11 @@ class ClaimProcessor:
             raise ValueError(error_msg)
         
         # Build simple text-based message
+        prompt = self._get_extraction_prompt(doc_type)
         messages = [
             {
                 "role": "user",
-                "content": f"{self._get_extraction_prompt()}\n\nDocument content:\n{document_text}"
+                "content": f"{prompt}\n\nDocument Type: {doc_type or 'unknown'}\n\nDocument content:\n{document_text}"
             }
         ]
         
@@ -219,7 +225,6 @@ class ClaimProcessor:
             )
             
             extracted_text = response.choices[0].message.content
-            print(f"[EXTRACT_CLAIM_DATA] Received response, length: {len(extracted_text)}")
             
             # Parse JSON response
             if '```json' in extracted_text:
@@ -228,7 +233,21 @@ class ClaimProcessor:
                 extracted_text = extracted_text.split('```')[1].split('```')[0]
             
             claim_data = json.loads(extracted_text.strip())
-            print("[EXTRACT_CLAIM_DATA] Successfully parsed JSON response")
+            
+            # ✅ FIX: Ensure items have valid amounts
+            if 'items' in claim_data:
+                for item in claim_data['items']:
+                    if item.get('amount') is None:
+                        item['amount'] = 0
+                    else:
+                        item['amount'] = float(item['amount'])
+            
+            # ✅ FIX: Ensure total_amount is set
+            if 'total_amount' not in claim_data or claim_data['total_amount'] is None:
+                if 'items' in claim_data and claim_data['items']:
+                    claim_data['total_amount'] = sum(item.get('amount', 0) for item in claim_data['items'])
+                else:
+                    claim_data['total_amount'] = 0
             
             # Add claim_date from parameter or use current date
             claim_data['claim_date'] = claim_date if claim_date else datetime.now().strftime('%Y-%m-%d')
@@ -243,60 +262,99 @@ class ClaimProcessor:
             error_msg = f"API call failed: {str(e)}"
             print(f"[EXTRACT_CLAIM_DATA] API ERROR: {error_msg}")
             raise
-    
-    def _get_extraction_prompt(self) -> str:
-        """Generate prompt for AI to extract claim data"""
-        return """Extract medical claim information from this document and return ONLY a JSON object with the following structure:
+        
+    def _get_extraction_prompt(self, doc_type: str = None) -> str:
+        """Generate prompt for AI to extract claim data based on document type"""
+        
+        base_prompt = """Extract medical claim information from this document and return ONLY a JSON object."""
+        
+        if doc_type == 'prescription':
+            specific_fields = """
+    Focus on extracting:
+    - Doctor details (name, registration, specialization)
+    - Diagnosis and symptoms
+    - Prescribed medicines with dosage
+    - Follow-up requirements
+    """
+        elif doc_type == 'medical_bill':
+            specific_fields = """
+    Focus on extracting:
+    - Hospital/clinic details
+    - Consultation fees
+    - Itemized charges
+    - Total amount
+    - Tax and billing details
+    """
+        elif doc_type == 'pharmacy_bill':
+            specific_fields = """
+    Focus on extracting:
+    - Pharmacy details
+    - Individual medicine items with batch numbers
+    - Quantities and prices
+    - Total amount
+    """
+        elif doc_type == 'lab_results':
+            specific_fields = """
+    Focus on extracting:
+    - Diagnostic center details
+    - Test names and results
+    - Reference ranges
+    - Pathologist details
+    """
+        else:
+            specific_fields = ""
+        
+        return base_prompt + specific_fields + """
 
-{
-  "claim_id": "string (if present, otherwise generate unique ID)",
-  "patient_name": "string",
-  "patient_age": "number (if present)",
-  "patient_gender": "string (Male/Female/Other if present)",
-  "patient_dob": "YYYY-MM-DD (if present)",
-  "employee_id": "string (if present)",
-  "policy_number": "string (if present)",
-  "treatment_date": "YYYY-MM-DD",
-  "document_type": "medical_bill|prescription|diagnostic_report|consultation_note",
-  "items": [
     {
-      "description": "string (detailed description of service/medicine)",
-      "category": "consultation|diagnostic|pharmacy|dental|vision|alternative_medicine",
-      "amount": number,
-      "quantity": number (if applicable),
-      "unit_price": number (if applicable)
+    "patient_name": "string",
+    "patient_age": "number (if present)",
+    "patient_gender": "string (Male/Female/Other if present)",
+    "patient_dob": "YYYY-MM-DD (if present)",
+    "employee_id": "string (if present)",
+    "policy_number": "string (if present)",
+    "treatment_date": "YYYY-MM-DD",
+    "document_type": "medical_bill|prescription|diagnostic_report|consultation_note",
+    "items": [
+        {
+        "description": "string (detailed description of service/medicine)",
+        "category": "consultation|diagnostic|pharmacy|dental|vision|alternative_medicine",
+        "amount": number,
+        "quantity": number (if applicable),
+        "unit_price": number (if applicable)
+        }
+    ],
+    "total_amount": number,
+    "hospital_name": "string (if present)",
+    "hospital_registration": "string (if present)",
+    "hospital_address": "string (if present)",
+    "doctor_name": "string (if present)",
+    "doctor_registration": "string (format: XX/123456/2020, if present)",
+    "doctor_specialization": "string (if present)",
+    "diagnosis": "string (primary diagnosis/reason for visit)",
+    "diagnosis_code": "string (ICD code if present)",
+    "symptoms": "string (patient symptoms if mentioned)",
+    "prescription_details": "string (medicines prescribed with dosage)",
+    "test_results": "string (diagnostic test results if present)",
+    "treatment_summary": "string (summary of treatment provided)",
+    "pre_authorization_number": "string (if present)",
+    "emergency_treatment": "boolean (true if emergency case)",
+    "follow_up_required": "boolean (if mentioned)",
+    "billing_details": {
+        "subtotal": number (if itemized),
+        "tax": number (if present),
+        "discount": number (if present)
     }
-  ],
-  "total_amount": number,
-  "hospital_name": "string (if present)",
-  "hospital_registration": "string (if present)",
-  "hospital_address": "string (if present)",
-  "doctor_name": "string (if present)",
-  "doctor_registration": "string (format: XX/123456/2020, if present)",
-  "doctor_specialization": "string (if present)",
-  "diagnosis": "string (primary diagnosis/reason for visit)",
-  "diagnosis_code": "string (ICD code if present)",
-  "symptoms": "string (patient symptoms if mentioned)",
-  "prescription_details": "string (medicines prescribed with dosage)",
-  "test_results": "string (diagnostic test results if present)",
-  "treatment_summary": "string (summary of treatment provided)",
-  "pre_authorization_number": "string (if present)",
-  "emergency_treatment": "boolean (true if emergency case)",
-  "follow_up_required": "boolean (if mentioned)",
-  "billing_details": {
-    "subtotal": number (if itemized),
-    "tax": number (if present),
-    "discount": number (if present)
-  }
-}
+    }
 
-IMPORTANT INSTRUCTIONS:
-- Extract ALL line items separately with detailed descriptions
-- Categorize each item correctly based on the service type
-- Capture all medical information including diagnosis, symptoms, and treatment details
-- If a field is not present in the document, omit it or set to null
-- Ensure all amounts are numeric values
-- Return ONLY the JSON, no additional text or explanations"""
+    IMPORTANT INSTRUCTIONS:
+    - DO NOT include a "claim_id" field - the system will generate this
+    - Extract ALL line items separately with detailed descriptions
+    - Categorize each item correctly based on the service type
+    - Capture all medical information including diagnosis, symptoms, and treatment details
+    - If a field is not present in the document, omit it or set to null
+    - Ensure all amounts are numeric values (not strings)
+    - Return ONLY the JSON, no additional text or explanations"""
     
     # ==================== STEP 1: BASIC ELIGIBILITY CHECK ====================
     
@@ -369,41 +427,68 @@ IMPORTANT INSTRUCTIONS:
     # ==================== STEP 2: DOCUMENT VALIDATION ====================
     
     def validate_documents(self, claim_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Step 2: Validate document completeness, authenticity, and consistency"""
+        """Step 2: Validate document completeness, authenticity, and consistency
+        
+        FIXED: Check for actual uploaded document types instead of policy checklist items
+        """
         issues = []
         is_valid = True
         
-        # Get required fields from policy
-        required_fields_config = self.policy.get('claim_requirements', {}).get('documents_required', [])
+        # Check required document types from policy
+        required_doc_types = self.policy.get('claim_requirements', {}).get(
+            'required_document_types', 
+            ['prescription', 'medical_bill']  # Default minimum
+        )
         
-        # Default required fields if not in policy
-        default_required = ['patient_name', 'treatment_date', 'total_amount', 'items']
-        fields_to_check = required_fields_config if required_fields_config else default_required
+        submitted_doc_types = claim_data.get('document_types_submitted', [])
         
-        for field in fields_to_check:
-            if not claim_data.get(field):
+        # Only check if required document TYPES were submitted (not checklist items)
+        for req_type in required_doc_types:
+            # Normalize the type name for comparison
+            req_type_normalized = req_type.lower().replace('_', ' ').replace('-', ' ')
+            submitted_normalized = [t.lower().replace('_', ' ').replace('-', ' ') for t in submitted_doc_types]
+            
+            if req_type_normalized not in submitted_normalized:
                 issues.append({
-                    'code': 'MISSING_DOCUMENTS',
+                    'code': 'MISSING_DOCUMENT_TYPE',
                     'severity': 'critical',
-                    'message': f"Required field missing: {field.replace('_', ' ').title()}"
+                    'message': f"Required document type not uploaded: {req_type.replace('_', ' ').title()}"
                 })
                 is_valid = False
         
-        # 2. Doctor Registration Validation
+        # Check essential data fields (not policy checklist items)
+        essential_fields = {
+            'patient_name': 'Patient Name',
+            'treatment_date': 'Treatment Date',
+            'total_amount': 'Total Amount',
+            'items': 'Line Items'
+        }
+        
+        for field, display_name in essential_fields.items():
+            value = claim_data.get(field)
+            if not value or (isinstance(value, list) and len(value) == 0):
+                issues.append({
+                    'code': 'MISSING_REQUIRED_FIELD',
+                    'severity': 'critical',
+                    'message': f"Required field missing: {display_name}"
+                })
+                is_valid = False
+        
+        # 2. Doctor Registration Validation (warning only if not critical)
         doctor_reg = claim_data.get('doctor_registration')
         if doctor_reg:
             if not self._validate_doctor_registration(doctor_reg):
                 issues.append({
                     'code': 'DOCTOR_REG_INVALID',
-                    'severity': 'critical',
+                    'severity': 'warning',
                     'message': f"Invalid doctor registration format: {doctor_reg}"
                 })
-                is_valid = False
         else:
+            # Only warning, not critical - doctor reg might be on prescription
             issues.append({
-                'code': 'DOCTOR_REG_INVALID',
+                'code': 'DOCTOR_REG_MISSING',
                 'severity': 'warning',
-                'message': "Doctor registration number not provided"
+                'message': "Doctor registration number not found in documents"
             })
         
         # 3. Date Consistency Check
@@ -411,39 +496,45 @@ IMPORTANT INSTRUCTIONS:
         treatment_date = claim_data.get('treatment_date')
         
         if claim_date and treatment_date:
-            c_date = datetime.strptime(claim_date, '%Y-%m-%d')
-            t_date = datetime.strptime(treatment_date, '%Y-%m-%d')
-            
-            if c_date < t_date:
+            try:
+                c_date = datetime.strptime(claim_date, '%Y-%m-%d')
+                t_date = datetime.strptime(treatment_date, '%Y-%m-%d')
+                
+                if c_date < t_date:
+                    issues.append({
+                        'code': 'DATE_MISMATCH',
+                        'severity': 'warning',  # Changed to warning - might be data extraction issue
+                        'message': f"Claim date ({claim_date}) is before treatment date ({treatment_date})"
+                    })
+            except ValueError:
                 issues.append({
-                    'code': 'DATE_MISMATCH',
-                    'severity': 'critical',
-                    'message': "Claim date cannot be before treatment date"
+                    'code': 'DATE_FORMAT_ERROR',
+                    'severity': 'warning',
+                    'message': "Could not validate date consistency"
                 })
-                is_valid = False
         
-        # 4. Patient Details Match
+        # 4. Patient Details Check
         patient_name = claim_data.get('patient_name', '')
         if len(patient_name.strip()) < 3:
             issues.append({
-                'code': 'PATIENT_MISMATCH',
+                'code': 'PATIENT_NAME_INCOMPLETE',
                 'severity': 'warning',
                 'message': "Patient name appears incomplete or invalid"
             })
         
-        # 5. Completeness Check
+        # 5. Completeness Check (warnings only)
         if not claim_data.get('doctor_name'):
             issues.append({
-                'code': 'MISSING_DOCUMENTS',
+                'code': 'DOCTOR_NAME_MISSING',
                 'severity': 'warning',
-                'message': "Doctor name not provided"
+                'message': "Doctor name not found in documents"
             })
         
         if not claim_data.get('hospital_name'):
             issues.append({
-                'code': 'MISSING_DOCUMENTS',
+                'code': 'HOSPITAL_NAME_MISSING',
                 'severity': 'warning',
-                'message': "Hospital/clinic name not provided"
+                'message': "Hospital/clinic name not found in documents"
             })
         
         return {
@@ -451,6 +542,7 @@ IMPORTANT INSTRUCTIONS:
             'is_valid': is_valid,
             'issues': issues
         }
+
     
     def _validate_doctor_registration(self, reg_number: str) -> bool:
         """Validate doctor registration number format from policy config"""
@@ -874,13 +966,39 @@ Return ONLY a JSON object with this structure:
     # ==================== COVERAGE ANALYSIS ====================
     
     def analyze_coverage(self, items: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Analyze coverage for each line item with detailed breakdown"""
+        """Analyze coverage for each line item with detailed breakdown
+        
+        FIXED: Only include items with actual amounts (>0) from bills, 
+        exclude prescription/lab result items that have no cost
+        """
         item_analysis = []
         total_approved = 0
         total_rejected = 0
         total_copay = 0
         
         for item in items:
+            # Skip items with no amount (typically from prescriptions/lab results)
+            claimed_amount = item.get('amount', 0)
+            if claimed_amount is None or claimed_amount <= 0:
+                continue
+            
+            # Skip items that are clearly from prescriptions (dosage instructions)
+            description = item.get('description', '').lower()
+            prescription_indicators = [
+                'after food', 'before food', 'at bedtime', 'twice daily', 
+                'thrice daily', '1-0-1', '0-0-1', '1-0-0', 'for 5 days', 
+                'for 3 days', 'for 7 days', 'tsp', 'teaspoon'
+            ]
+            if any(indicator in description for indicator in prescription_indicators) and claimed_amount == 0:
+                continue
+            
+            # Skip lab result individual parameters (they're part of the main test)
+            lab_indicators = ['hemoglobin', 'wbc count', 'rbc count', 'platelet', 
+                            'neutrophils', 'lymphocytes', 'monocytes', 'eosinophils',
+                            'basophils', 'hematocrit', 'pcv', 'mcv', 'mch', 'mchc']
+            if any(indicator in description for indicator in lab_indicators) and claimed_amount == 0:
+                continue
+            
             analysis = self._analyze_item_detailed(item)
             item_analysis.append(analysis)
             
@@ -894,6 +1012,7 @@ Return ONLY a JSON object with this structure:
             'total_rejected': total_rejected,
             'total_copay': total_copay
         }
+
     
     def _analyze_item_detailed(self, item: Dict[str, Any]) -> Dict[str, Any]:
         """Detailed analysis of single item for coverage"""
@@ -971,6 +1090,37 @@ Return ONLY a JSON object with this structure:
         result['reason'] = f"Approved with {copay_pct}% copay"
         return result
     
+    def _is_test_covered_llm(self, description: str, covered_tests: List[str]) -> bool:
+        desc = description.lower()
+
+        for test in covered_tests:
+            if test.lower() in desc:
+                return True
+
+        for test in covered_tests:
+            tokens = test.lower().replace('-', ' ').split()
+            if all(tok in desc for tok in tokens):
+                return True
+
+        try:
+            prompt = f"""
+    Determine if the medical test description refers to one of the covered diagnostic tests.
+    Return only 'true' or 'false'.
+
+    Item: "{description}"
+    Covered: {covered_tests}
+    """
+            rsp = self.client.chat.completions.create(
+                model=self.model_deployment,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0
+            )
+            return "true" in rsp.choices[0].message.content.lower()
+        except:
+            return False
+
+
+    
     def _check_diagnostic_coverage(self, item: Dict, result: Dict) -> Dict:
         """Check diagnostic test coverage"""
         policy = self.policy.get('coverage_details', {}).get('diagnostic_tests', {})
@@ -984,12 +1134,7 @@ Return ONLY a JSON object with this structure:
         
         # Check if test is in covered list
         covered_tests = policy.get('covered_tests', [])
-        covered = False
-        for test in covered_tests:
-            test_keywords = test.lower().split()
-            if any(keyword in description for keyword in test_keywords):
-                covered = True
-                break
+        covered = self._is_test_covered_llm(description, covered_tests)
         
         if not covered:
             result['rejected_amount'] = amount
@@ -1129,21 +1274,24 @@ Return ONLY a JSON object with this structure:
     # ==================== FINAL ADJUDICATION ====================
     
     def make_adjudication_decision(self, claim_data: Dict[str, Any], 
-                                   eligibility: Dict[str, Any],
-                                   doc_validation: Dict[str, Any],
-                                   coverage_verification: Dict[str, Any],
-                                   limit_validation: Dict[str, Any],
-                                   medical_necessity: Dict[str, Any],
-                                   coverage_analysis: Dict[str, Any],
-                                   fraud_detection: Dict[str, Any]) -> Dict[str, Any]:
-        """Make final adjudication decision based on all validation steps"""
+                               eligibility: Dict[str, Any],
+                               doc_validation: Dict[str, Any],
+                               coverage_verification: Dict[str, Any],
+                               limit_validation: Dict[str, Any],
+                               medical_necessity: Dict[str, Any],
+                               coverage_analysis: Dict[str, Any],
+                               fraud_detection: Dict[str, Any]) -> Dict[str, Any]:
+        """Make final adjudication decision based on all validation steps
         
-        # Collect all critical issues
+        FIXED: Proper handling of partial approvals and manual review triggers
+        """
+        
+        # Collect all issues by severity
         all_critical_issues = []
         all_warnings = []
         
         for step_result in [eligibility, doc_validation, coverage_verification, 
-                           limit_validation, medical_necessity]:
+                        limit_validation, medical_necessity]:
             issues = step_result.get('issues', [])
             for issue in issues:
                 if issue.get('severity') == 'critical':
@@ -1162,145 +1310,459 @@ Return ONLY a JSON object with this structure:
         fraud_threshold = fraud_config.get('fraud_threshold', 0.7)
         confidence_threshold = self.policy.get('adjudication_rules', {}).get('confidence_threshold', 0.7)
         
-        # Determine if manual review is needed
-        requires_manual_review = (
-            fraud_detection.get('requires_manual_review', False) or
-            confidence_score < confidence_threshold or
-            claim_data.get('total_amount', 0) > high_value_threshold
-        )
+        total_claimed = claim_data.get('total_amount', 0)
+        total_approved = coverage_analysis.get('total_approved', 0)
+        total_rejected = coverage_analysis.get('total_rejected', 0)
+        total_copay = coverage_analysis.get('total_copay', 0)
         
-        # Priority Rule 1: Safety first - reject suspicious/fraudulent claims
+        # ========== MANUAL REVIEW TRIGGERS ==========
+        manual_review_reasons = []
+        
+        # 1. High fraud score
         if fraud_detection.get('fraud_score', 0) > fraud_threshold:
-            return self._create_decision_output(
-                claim_data, 'MANUAL_REVIEW', 0, all_critical_issues, all_warnings,
-                confidence_score, coverage_analysis,
-                "High fraud risk detected - requires manual review",
-                "Claim flagged for fraud investigation. Contact support."
-            )
+            manual_review_reasons.append("High fraud risk detected")
         
-        # Priority Rule 2: Policy exclusions override everything
-        exclusion_issues = [i for i in all_critical_issues if i['code'] == 'EXCLUDED_CONDITION']
-        if exclusion_issues:
-            return self._create_decision_output(
-                claim_data, 'REJECTED', 0, all_critical_issues, all_warnings,
-                confidence_score, coverage_analysis,
-                "Service/condition excluded by policy",
-                "This treatment is not covered under your policy. Review your policy document for details."
-            )
+        # 2. High-value claim
+        if total_claimed > high_value_threshold:
+            manual_review_reasons.append(f"High-value claim (₹{total_claimed:,.2f} > ₹{high_value_threshold:,.2f})")
         
-        # Priority Rule 3: Critical eligibility and validation failures
-        if not eligibility.get('is_eligible') or not doc_validation.get('is_valid'):
-            return self._create_decision_output(
-                claim_data, 'REJECTED', 0, all_critical_issues, all_warnings,
-                confidence_score, coverage_analysis,
-                "Failed basic eligibility or document validation",
-                "Please address the issues listed and resubmit your claim."
-            )
+        # 3. Low confidence
+        if confidence_score < confidence_threshold:
+            manual_review_reasons.append(f"Low confidence score ({confidence_score:.0%})")
         
-        # Priority Rule 4: Hard limits cannot be exceeded
-        hard_limit_codes = ['ANNUAL_LIMIT_EXCEEDED', 'PER_CLAIM_EXCEEDED', 'BELOW_MIN_AMOUNT', 'LATE_SUBMISSION']
-        hard_limit_issues = [i for i in all_critical_issues if i['code'] in hard_limit_codes]
-        if hard_limit_issues:
-            return self._create_decision_output(
-                claim_data, 'REJECTED', 0, all_critical_issues, all_warnings,
-                confidence_score, coverage_analysis,
-                hard_limit_issues[0]['message'],
-                "This claim cannot be approved due to policy limit constraints."
-            )
+        # 4. Fraud indicators present
+        if fraud_detection.get('indicators'):
+            indicator_types = [i['type'] for i in fraud_detection['indicators']]
+            if 'DOCUMENT_MODIFIED' in indicator_types or 'UNUSUAL_PATTERN' in indicator_types:
+                manual_review_reasons.append("Suspicious patterns detected")
         
-        # Priority Rule 5: Medical necessity is mandatory
-        if not medical_necessity.get('is_necessary'):
-            necessity_issues = [i for i in all_critical_issues 
-                              if i['code'] in ['COSMETIC_PROCEDURE', 'EXPERIMENTAL_TREATMENT', 'NOT_MEDICALLY_NECESSARY']]
+        # ========== REJECTION CONDITIONS (Hard Stops) ==========
+        
+        # Check for absolute rejection conditions
+        rejection_codes = {
+            'POLICY_INACTIVE': "Policy not active on treatment date",
+            'POLICY_EXPIRED': "Policy expired before treatment date",
+            'WAITING_PERIOD': "Treatment during waiting period",
+            'MEMBER_NOT_COVERED': "Member not found in policy",
+            'EXCLUDED_CONDITION': "Service/condition excluded by policy",
+            'COSMETIC_PROCEDURE': "Cosmetic procedure not covered",
+            'EXPERIMENTAL_TREATMENT': "Experimental treatment not covered",
+            'LATE_SUBMISSION': "Claim submitted after deadline"
+        }
+        
+        hard_rejection_issues = [i for i in all_critical_issues if i['code'] in rejection_codes]
+        
+        if hard_rejection_issues:
             return self._create_decision_output(
                 claim_data, 'REJECTED', 0, all_critical_issues, all_warnings,
                 confidence_score, coverage_analysis,
-                necessity_issues[0]['message'] if necessity_issues else "Medical necessity not established",
-                "This treatment is not covered as it is not medically necessary."
+                hard_rejection_issues[0]['message'],
+                self._get_rejection_next_steps(hard_rejection_issues[0]['code'])
             )
         
-        # Priority Rule 6: Coverage issues
-        if not coverage_verification.get('coverage_valid'):
-            coverage_issues = [i for i in all_critical_issues 
-                             if i['code'] in ['SERVICE_NOT_COVERED', 'PRE_AUTH_MISSING']]
-            if coverage_issues:
-                return self._create_decision_output(
-                    claim_data, 'REJECTED', 0, all_critical_issues, all_warnings,
-                    confidence_score, coverage_analysis,
-                    coverage_issues[0]['message'],
-                    "Service not covered under your policy or pre-authorization missing."
-                )
-        
-        # If we reach here, check coverage analysis for approval
-        total_approved = coverage_analysis['total_approved']
-        total_rejected = coverage_analysis['total_rejected']
-        
-        # Check for manual review trigger
-        if requires_manual_review:
+        # ========== MANUAL REVIEW DECISION ==========
+        if manual_review_reasons:
             return self._create_decision_output(
                 claim_data, 'MANUAL_REVIEW', total_approved, all_critical_issues, all_warnings,
                 confidence_score, coverage_analysis,
-                f"Claim requires manual review (confidence: {confidence_score:.0%})",
-                "Your claim is under review by our team. You will be notified within 3-5 business days."
+                f"Requires manual review: {'; '.join(manual_review_reasons)}",
+                "Your claim has been escalated for manual review. Our team will contact you within 3-5 business days."
             )
         
-        # Determine final decision
-        if total_approved == 0:
+        # ========== CHECK IF BASIC VALIDATION PASSED ==========
+        # Only reject for missing essential documents/fields, not checklist items
+        essential_missing = [i for i in all_critical_issues 
+                            if i['code'] in ['MISSING_DOCUMENT_TYPE', 'MISSING_REQUIRED_FIELD']]
+        
+        if essential_missing:
             return self._create_decision_output(
                 claim_data, 'REJECTED', 0, all_critical_issues, all_warnings,
                 confidence_score, coverage_analysis,
-                "No covered items found in claim",
-                "None of the services claimed are covered under your policy."
+                "Essential documents or information missing",
+                "Please upload all required documents and ensure patient details are complete."
             )
-        elif total_rejected > 0:
+        
+        # ========== COVERAGE-BASED DECISIONS ==========
+        
+        # No covered items at all
+        if total_approved == 0 and total_claimed > 0:
+            return self._create_decision_output(
+                claim_data, 'REJECTED', 0, all_critical_issues, all_warnings,
+                confidence_score, coverage_analysis,
+                "No items covered under policy",
+                "The services claimed are not covered under your policy. Please review your coverage details."
+            )
+        
+        # Calculate approval percentage
+        if total_claimed > 0:
+            approval_percentage = (total_approved / total_claimed) * 100
+        else:
+            approval_percentage = 0
+        
+        # ========== PARTIAL APPROVAL CONDITIONS ==========
+        # Partial approval when:
+        # 1. Some items rejected but some approved
+        # 2. Co-payment applies (patient pays portion)
+        # 3. Sub-limits exceeded (approved up to limit)
+        
+        is_partial = False
+        partial_reasons = []
+        
+        if total_rejected > 0:
+            is_partial = True
+            partial_reasons.append(f"₹{total_rejected:,.2f} not covered")
+        
+        if total_copay > 0:
+            is_partial = True
+            partial_reasons.append(f"₹{total_copay:,.2f} co-payment applies")
+        
+        # Check for sub-limit exceeded items
+        sub_limit_items = [item for item in coverage_analysis.get('item_analysis', []) 
+                        if item.get('sub_limit_exceeded')]
+        if sub_limit_items:
+            is_partial = True
+            partial_reasons.append("Some items exceed sub-limits")
+        
+        # Check for annual/per-claim limit issues (partial, not full rejection)
+        limit_exceeded_issues = [i for i in all_critical_issues 
+                                if i['code'] in ['ANNUAL_LIMIT_EXCEEDED', 'PER_CLAIM_EXCEEDED']]
+        if limit_exceeded_issues:
+            # Approve up to limit instead of rejecting
+            annual_limit = self.policy.get('coverage_details', {}).get('annual_limit')
+            per_claim_limit = self.policy.get('coverage_details', {}).get('per_claim_limit')
+            
+            if per_claim_limit and total_approved > per_claim_limit:
+                total_approved = per_claim_limit
+                is_partial = True
+                partial_reasons.append(f"Approved up to per-claim limit (₹{per_claim_limit:,.2f})")
+            
+            # Note: Annual limit check would need YTD data
+        
+        # ========== FINAL DECISION ==========
+        
+        if is_partial and total_approved > 0:
             return self._create_decision_output(
                 claim_data, 'PARTIAL', total_approved, all_critical_issues, all_warnings,
                 confidence_score, coverage_analysis,
-                "Some items covered, some not covered or exceed limits",
-                f"Approved: ₹{total_approved:.2f}. See breakdown for details on rejected items."
+                f"Partially approved: {'; '.join(partial_reasons)}",
+                f"Approved amount: ₹{total_approved:,.2f}. Patient responsibility: ₹{(total_copay + total_rejected):,.2f}. Payment will be processed within 7-10 business days."
             )
-        else:
+        elif total_approved > 0:
             return self._create_decision_output(
                 claim_data, 'APPROVED', total_approved, all_critical_issues, all_warnings,
                 confidence_score, coverage_analysis,
-                "All items covered as per policy",
-                f"Claim approved. Amount ₹{total_approved:.2f} will be processed for payment."
+                "Claim fully approved as per policy coverage",
+                f"Your claim of ₹{total_approved:,.2f} has been approved. Payment will be processed within 7-10 business days."
             )
-    
+        else:
+            return self._create_decision_output(
+                claim_data, 'REJECTED', 0, all_critical_issues, all_warnings,
+                confidence_score, coverage_analysis,
+                "Unable to process claim",
+                "Please contact customer support for assistance with your claim."
+            )
+    def _get_rejection_next_steps(self, rejection_code: str) -> str:
+        """Get appropriate next steps based on rejection reason"""
+        next_steps_map = {
+            'POLICY_INACTIVE': "Please verify your policy status and effective dates.",
+            'POLICY_EXPIRED': "Your policy has expired. Please renew your policy to submit new claims.",
+            'WAITING_PERIOD': "This claim is within the waiting period. You can resubmit after the waiting period ends.",
+            'MEMBER_NOT_COVERED': "Please verify member details match your policy records.",
+            'EXCLUDED_CONDITION': "This service is explicitly excluded from your policy. Review your policy document for coverage details.",
+            'COSMETIC_PROCEDURE': "Cosmetic procedures are not covered. Only medically necessary treatments are eligible.",
+            'EXPERIMENTAL_TREATMENT': "Experimental treatments require special approval. Contact us for pre-authorization.",
+            'LATE_SUBMISSION': "Claims must be submitted within the specified timeline. Contact support if you have extenuating circumstances."
+        }
+        return next_steps_map.get(rejection_code, "Please contact customer support for assistance.")
+
     def _create_decision_output(self, claim_data: Dict, decision: str, 
-                               approved_amount: float, critical_issues: List,
-                               warnings: List, confidence: float,
-                               coverage_analysis: Dict, reason: str, 
-                               next_steps: str) -> Dict[str, Any]:
-        """Create standardized decision output"""
+                           approved_amount: float, critical_issues: List,
+                           warnings: List, confidence: float,
+                           coverage_analysis: Dict, reason: str, 
+                           next_steps: str) -> Dict[str, Any]:
+        """Create standardized decision output
         
-        rejection_reasons = [issue['code'] for issue in critical_issues]
+        FIXED: 
+        1. Item status reflects final decision (not coverage eligibility)
+        2. Added detailed reasoning/judgment explanation
+        """
+        
+        # Get rejection reason codes
+        rejection_reasons = []
+        if decision == 'REJECTED':
+            rejection_reasons = list(set([issue['code'] for issue in critical_issues]))
+        
+        total_claimed = claim_data.get('total_amount', 0)
+        total_copay = coverage_analysis.get('total_copay', 0)
+        total_rejected_items = coverage_analysis.get('total_rejected', 0)
+        
+        # FIXED: Update item breakdown to reflect FINAL decision
+        item_breakdown = self._finalize_item_breakdown(
+            coverage_analysis.get('item_analysis', []),
+            decision,
+            reason
+        )
+        
+        # Build notes from warnings and observations
+        notes = []
+        if warnings:
+            notes.extend([w['message'] for w in warnings[:3]])
+        if self.fraud_indicators:
+            notes.append(f"Fraud score: {len(self.fraud_indicators)} indicators detected")
+        
+        # BUILD DETAILED REASONING
+        reasoning = self._build_judgment_reasoning(
+            claim_data, decision, critical_issues, warnings,
+            coverage_analysis, confidence, approved_amount
+        )
         
         return {
+            # Core decision fields
             'claim_id': claim_data.get('claim_id', 'N/A'),
-            'patient_name': claim_data.get('patient_name', 'N/A'),
-            'employee_id': claim_data.get('employee_id', 'N/A'),
             'decision': decision,
-            'reason': reason,
             'approved_amount': round(approved_amount, 2),
-            'total_claimed': claim_data.get('total_amount', 0),
             'rejection_reasons': rejection_reasons,
             'confidence_score': round(confidence, 2),
+            'notes': '; '.join(notes) if notes else "No additional observations",
+            'next_steps': next_steps,
+            
+            # NEW: Detailed reasoning for the judgment
+            'reasoning': reasoning,
+            
+            # Extended information
+            'patient_name': claim_data.get('patient_name', 'N/A'),
+            'employee_id': claim_data.get('employee_id', 'N/A'),
+            'reason': reason,
+            'total_claimed': round(total_claimed, 2),
+            
+            # Financial breakdown
             'deductions': {
-                'copay': round(coverage_analysis.get('total_copay', 0), 2),
-                'rejected_items': round(coverage_analysis.get('total_rejected', 0), 2)
+                'copay': round(total_copay, 2),
+                'rejected_items': round(total_rejected_items, 2)
             },
-            'patient_payable': round(coverage_analysis.get('total_rejected', 0) + 
-                                    coverage_analysis.get('total_copay', 0), 2),
+            'patient_payable': round(total_rejected_items + total_copay, 2),
             'insurance_payable': round(approved_amount, 2),
+            
+            # Detailed breakdowns
             'critical_issues': critical_issues,
             'warnings': warnings,
-            'item_breakdown': coverage_analysis.get('item_analysis', []),
+            'item_breakdown': item_breakdown,  # Now reflects final decision
             'fraud_indicators': self.fraud_indicators,
-            'next_steps': next_steps,
+            
+            # Metadata
             'adjudication_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             'policy_id': self.policy.get('policy_id', 'N/A')
         }
+    
+    def _build_judgment_reasoning(self, claim_data: Dict, decision: str,
+                              critical_issues: List, warnings: List,
+                              coverage_analysis: Dict, confidence: float,
+                              approved_amount: float) -> Dict[str, Any]:
+        """
+        Build detailed reasoning explaining WHY the decision was made.
+        This provides transparency into the adjudication logic.
+        """
+        
+        reasoning = {
+            'summary': '',
+            'decision_factors': [],
+            'validation_steps': {},
+            'coverage_summary': {},
+            'recommendation': ''
+        }
+        
+        total_claimed = claim_data.get('total_amount', 0)
+        
+        # Decision factors based on what triggered the decision
+        factors = []
+        
+        if decision == 'REJECTED':
+            reasoning['summary'] = f"Claim REJECTED due to {len(critical_issues)} critical issue(s) that prevent approval."
+            
+            # Group issues by type for clearer explanation
+            issue_groups = {}
+            for issue in critical_issues:
+                code = issue['code']
+                if code not in issue_groups:
+                    issue_groups[code] = []
+                issue_groups[code].append(issue['message'])
+            
+            for code, messages in issue_groups.items():
+                factor = {
+                    'type': code,
+                    'impact': 'blocking',
+                    'description': self._get_issue_explanation(code),
+                    'details': messages
+                }
+                factors.append(factor)
+            
+            reasoning['recommendation'] = "Address all critical issues listed above and resubmit the claim."
+            
+        elif decision == 'MANUAL_REVIEW':
+            reasoning['summary'] = "Claim requires human review due to complexity or risk factors."
+            
+            if confidence < 0.7:
+                factors.append({
+                    'type': 'LOW_CONFIDENCE',
+                    'impact': 'review_required',
+                    'description': f"System confidence ({confidence:.0%}) is below threshold (70%)",
+                    'details': ["Incomplete information or data quality issues detected"]
+                })
+            
+            if total_claimed > 25000:
+                factors.append({
+                    'type': 'HIGH_VALUE',
+                    'impact': 'review_required',
+                    'description': f"High-value claim (₹{total_claimed:,.2f}) requires manual verification",
+                    'details': ["Claims above ₹25,000 are automatically escalated"]
+                })
+            
+            if self.fraud_indicators:
+                factors.append({
+                    'type': 'FRAUD_INDICATORS',
+                    'impact': 'review_required',
+                    'description': "Potential fraud indicators detected",
+                    'details': [ind['message'] for ind in self.fraud_indicators]
+                })
+            
+            reasoning['recommendation'] = "Claim will be reviewed by our team within 3-5 business days."
+            
+        elif decision == 'PARTIAL':
+            total_copay = coverage_analysis.get('total_copay', 0)
+            total_rejected = coverage_analysis.get('total_rejected', 0)
+            
+            reasoning['summary'] = f"Claim PARTIALLY APPROVED. ₹{approved_amount:,.2f} of ₹{total_claimed:,.2f} will be reimbursed."
+            
+            if total_copay > 0:
+                factors.append({
+                    'type': 'COPAY_APPLIED',
+                    'impact': 'partial_deduction',
+                    'description': f"Co-payment of ₹{total_copay:,.2f} applies per policy terms",
+                    'details': ["Co-pay percentages vary by service category"]
+                })
+            
+            if total_rejected > 0:
+                factors.append({
+                    'type': 'ITEMS_NOT_COVERED',
+                    'impact': 'partial_deduction',
+                    'description': f"₹{total_rejected:,.2f} not covered under policy",
+                    'details': ["Some services/items are excluded or exceed limits"]
+                })
+            
+            reasoning['recommendation'] = f"Patient is responsible for ₹{(total_copay + total_rejected):,.2f}. Approved amount will be processed for payment."
+            
+        elif decision == 'APPROVED':
+            reasoning['summary'] = f"Claim FULLY APPROVED. ₹{approved_amount:,.2f} will be reimbursed."
+            
+            factors.append({
+                'type': 'ALL_VALIDATIONS_PASSED',
+                'impact': 'approved',
+                'description': "All eligibility, coverage, and validation checks passed",
+                'details': ["Policy active", "Services covered", "Within limits", "Medically necessary"]
+            })
+            
+            reasoning['recommendation'] = "Payment will be processed within 7-10 business days."
+        
+        reasoning['decision_factors'] = factors
+        
+        # Validation steps summary
+        reasoning['validation_steps'] = {
+            'eligibility': 'passed' if not any(i['code'] in ['POLICY_INACTIVE', 'POLICY_EXPIRED', 'WAITING_PERIOD'] for i in critical_issues) else 'failed',
+            'documents': 'passed' if not any(i['code'].startswith('MISSING_') for i in critical_issues) else 'failed',
+            'coverage': 'passed' if not any(i['code'] in ['EXCLUDED_CONDITION', 'SERVICE_NOT_COVERED'] for i in critical_issues) else 'failed',
+            'limits': 'passed' if not any(i['code'] in ['ANNUAL_LIMIT_EXCEEDED', 'PER_CLAIM_EXCEEDED'] for i in critical_issues) else 'failed',
+            'medical_necessity': 'passed' if not any(i['code'] in ['COSMETIC_PROCEDURE', 'EXPERIMENTAL_TREATMENT', 'NOT_MEDICALLY_NECESSARY'] for i in critical_issues) else 'failed'
+        }
+        
+        # Coverage summary
+        reasoning['coverage_summary'] = {
+            'total_claimed': total_claimed,
+            'eligible_amount': coverage_analysis.get('total_approved', 0) + coverage_analysis.get('total_copay', 0),
+            'copay_deduction': coverage_analysis.get('total_copay', 0),
+            'not_covered': coverage_analysis.get('total_rejected', 0),
+            'final_approved': approved_amount if decision in ['APPROVED', 'PARTIAL'] else 0
+        }
+        
+        return reasoning
+    
+    def _get_issue_explanation(self, issue_code: str) -> str:
+        """Get human-readable explanation for issue codes"""
+        explanations = {
+            'POLICY_INACTIVE': "The insurance policy was not active on the date of treatment",
+            'POLICY_EXPIRED': "The insurance policy had expired before the treatment date",
+            'WAITING_PERIOD': "The treatment occurred during the policy waiting period",
+            'MEMBER_NOT_COVERED': "The patient is not listed as a covered member on this policy",
+            'MISSING_DOCUMENT_TYPE': "Required supporting documents were not uploaded",
+            'MISSING_REQUIRED_FIELD': "Essential claim information is missing from the documents",
+            'DATE_MISMATCH': "Inconsistency detected between claim date and treatment date",
+            'DOCTOR_REG_INVALID': "Doctor's registration number could not be verified",
+            'EXCLUDED_CONDITION': "The treatment or condition is specifically excluded from coverage",
+            'SERVICE_NOT_COVERED': "This type of service is not included in the policy coverage",
+            'PRE_AUTH_MISSING': "Pre-authorization was required but not obtained",
+            'ANNUAL_LIMIT_EXCEEDED': "The claim would exceed the annual coverage limit",
+            'PER_CLAIM_EXCEEDED': "The claim amount exceeds the per-claim limit",
+            'BELOW_MIN_AMOUNT': "The claim amount is below the minimum threshold",
+            'LATE_SUBMISSION': "The claim was submitted after the allowed submission window",
+            'COSMETIC_PROCEDURE': "Cosmetic or elective procedures are not covered",
+            'EXPERIMENTAL_TREATMENT': "Experimental or investigational treatments are not covered",
+            'NOT_MEDICALLY_NECESSARY': "The treatment was deemed not medically necessary"
+        }
+        return explanations.get(issue_code, f"Validation failed: {issue_code}")
+    
+    def _finalize_item_breakdown(self, item_analysis: List[Dict], 
+                            final_decision: str, 
+                            rejection_reason: str) -> List[Dict]:
+        """
+        Update item statuses to reflect the FINAL claim decision.
+
+        If overall claim is REJECTED, all items should show as rejected
+        even if they would have been eligible for coverage.
+        """
+        finalized_items = []
+        
+        for item in item_analysis:
+            item_copy = item.copy()
+            
+            if final_decision == 'REJECTED':
+                # 🔒 Hard override: nothing can be approved if claim-level is rejected
+                claimed = item_copy.get('claimed_amount', 0) or 0
+
+                # Override coverage-facing fields
+                item_copy['status'] = 'rejected'
+                item_copy['approved_amount'] = 0
+                item_copy['copay_amount'] = 0
+                item_copy['rejected_amount'] = claimed
+
+                # Final decision fields
+                item_copy['final_status'] = 'rejected'
+                item_copy['final_approved_amount'] = 0
+                item_copy['final_reason'] = f"Claim rejected: {rejection_reason}"
+
+                # Keep coverage eligibility only as debug info
+                item_copy['coverage_eligible'] = False
+                item_copy['coverage_analysis'] = "Not payable due to claim-level rejection"
+            
+            elif final_decision == 'MANUAL_REVIEW':
+                item_copy['final_status'] = 'pending_review'
+                item_copy['final_approved_amount'] = 0
+                item_copy['final_reason'] = "Awaiting manual review"
+                item_copy['coverage_eligible'] = item.get('status') == 'approved'
+                item_copy['coverage_analysis'] = item.get('reason', '')
+                
+            elif final_decision == 'PARTIAL':
+                item_copy['final_status'] = item.get('status', 'unknown')
+                item_copy['final_approved_amount'] = item.get('approved_amount', 0)
+                item_copy['final_reason'] = item.get('reason', '')
+                
+            elif final_decision == 'APPROVED':
+                item_copy['final_status'] = item.get('status', 'approved')
+                item_copy['final_approved_amount'] = item.get('approved_amount', 0)
+                item_copy['final_reason'] = item.get('reason', '')
+            
+            finalized_items.append(item_copy)
+        
+        return finalized_items
+
     
     def _calculate_comprehensive_confidence(self, claim_data: Dict, 
                                            doc_validation: Dict,
@@ -1335,24 +1797,135 @@ Return ONLY a JSON object with this structure:
         return max(0.0, min(1.0, score))
     
     # ==================== COMPLETE PROCESSING PIPELINE ====================
-    
-    def process_claim_complete(self, file_path: str, claim_date: str = None, 
-                      policy_id: str = None, member_id: str = None) -> Dict[str, Any]:
+    def _merge_claim_data(self, existing_data: Dict, new_data: Dict, doc_type: str) -> Dict[str, Any]:
         """
-        Complete end-to-end claim processing with database storage.
+        Intelligently merge data from multiple documents.
+        
+        FIXED: Don't add prescription/lab items to main items list if they have no cost
         """
+        if not existing_data:
+            return new_data
+        
+        # Priority rules for different fields based on document type
+        priority_map = {
+            'prescription': ['doctor_name', 'doctor_registration', 'doctor_specialization', 
+                            'diagnosis', 'symptoms', 'prescription_details'],
+            'medical_bill': ['hospital_name', 'hospital_registration', 'hospital_address',
+                            'consultation_fee', 'billing_details'],
+            'pharmacy_bill': ['pharmacy_items', 'medicines_total'],
+            'lab_results': ['test_results', 'diagnostic_details']
+        }
+        
+        merged = existing_data.copy()
+        
+        # Merge basic patient info (prefer most complete data)
+        for field in ['patient_name', 'patient_age', 'patient_gender', 'patient_dob', 
+                    'employee_id', 'policy_number', 'treatment_date']:
+            if new_data.get(field) and not existing_data.get(field):
+                merged[field] = new_data[field]
+        
+        # Merge items from different documents - ONLY if they have amounts
+        if 'items' in new_data and new_data['items']:
+            if 'items' not in merged:
+                merged['items'] = []
+            
+            for item in new_data['items']:
+                # Add document type to each item for tracking
+                item['source_document'] = doc_type
+                
+                # Ensure amount is not None
+                if item.get('amount') is None:
+                    item['amount'] = 0
+                
+                # Only add items with actual amounts to the main items list
+                # Prescriptions and lab results typically don't have costs
+                if doc_type in ['prescription', 'lab_results']:
+                    # Store separately for reference but don't add to billable items
+                    if f'{doc_type}_items' not in merged:
+                        merged[f'{doc_type}_items'] = []
+                    merged[f'{doc_type}_items'].append(item)
+                else:
+                    # Medical bills and pharmacy bills have actual costs
+                    if item['amount'] > 0:
+                        merged['items'].append(item)
+        
+        # Merge document-specific fields based on priority
+        priority_fields = priority_map.get(doc_type, [])
+        for field in priority_fields:
+            if new_data.get(field):
+                merged[field] = new_data[field]
+        
+        # Merge medical details
+        if doc_type == 'prescription':
+            merged['prescription_details'] = new_data.get('prescription_details', '')
+            merged['diagnosis'] = new_data.get('diagnosis', merged.get('diagnosis', ''))
+            merged['symptoms'] = new_data.get('symptoms', merged.get('symptoms', ''))
+            # Store prescribed medicines separately for cross-reference
+            merged['prescribed_medicines'] = new_data.get('items', [])
+        
+        if doc_type == 'lab_results':
+            merged['test_results'] = new_data.get('test_results', '')
+            # Store lab tests separately for reference
+            merged['lab_tests'] = new_data.get('items', [])
+        
+        # Calculate total_amount from bills only
+        if doc_type in ['medical_bill', 'pharmacy_bill'] and new_data.get('total_amount'):
+            if 'bill_totals' not in merged:
+                merged['bill_totals'] = {}
+            merged['bill_totals'][doc_type] = new_data['total_amount']
+        
+        # Sum all bill totals
+        if 'bill_totals' in merged:
+            merged['total_amount'] = sum(merged['bill_totals'].values())
+        elif 'items' in merged and merged['items']:
+            merged['total_amount'] = sum(
+                float(item.get('amount') or 0) for item in merged['items']
+            )
+        else:
+            merged['total_amount'] = merged.get('total_amount', 0)
+        
+        # Store document-specific extracted data
+        if 'documents_data' not in merged:
+            merged['documents_data'] = {}
+        merged['documents_data'][doc_type] = new_data
+        
+        return merged
+
+    def process_claim_complete(self, file_paths: Dict[str, str], claim_date: str = None, 
+                  policy_id: str = None, member_id: str = None) -> Dict[str, Any]:
+        """
+        Complete end-to-end claim processing with multiple documents.
+        """
+        claim_data = {}
+        
         try:
-            # Step 0: Read and Extract Document
-            print("Step 0: Reading document...")
-            document_text = self.read_document(file_path)
-            claim_data = self.extract_claim_data(document_text, claim_date)
+            # Step 0: Read and Extract from ALL Documents
+            print("Step 0: Reading multiple documents...")
+            all_documents_text = {}
             
-            # Generate unique claim ID if not present
-            if not claim_data.get('claim_id'):
-                claim_data['claim_id'] = f"CLM_{datetime.now().strftime('%Y%m%d')}_{str(uuid.uuid4())[:8].upper()}"
+            # Process each document type
+            for doc_type, file_path in file_paths.items():
+                print(f"Processing {doc_type}: {file_path}")
+                document_text = self.read_document(file_path)
+                all_documents_text[doc_type] = document_text
+                
+                # Extract data from each document
+                extracted_data = self.extract_claim_data(document_text, claim_date, doc_type)
+                
+                # Merge extracted data intelligently
+                claim_data = self._merge_claim_data(claim_data, extracted_data, doc_type)
             
-            # Add file path to claim data
-            claim_data['document_path'] = file_path
+            # ✅ FIX: ALWAYS generate a NEW unique claim ID, ignore extracted ones
+            # Extracted claim_ids might be duplicates or placeholder values
+            original_claim_id = claim_data.get('claim_id')
+            claim_data['claim_id'] = f"CLM_{datetime.now().strftime('%Y%m%d%H%M%S')}_{str(uuid.uuid4())[:8].upper()}"
+            
+            if original_claim_id:
+                print(f"Replaced extracted claim_id '{original_claim_id}' with unique '{claim_data['claim_id']}'")
+            
+            # Store all document paths
+            claim_data['document_paths'] = file_paths
+            claim_data['document_types_submitted'] = list(file_paths.keys())
             
             # Link to policy and member
             if policy_id:
@@ -1372,32 +1945,60 @@ Return ONLY a JSON object with this structure:
                 if member:
                     claim_data['member_id'] = member['member_id']
             
-            # ✅ MAP FIELD NAMES FOR DATABASE
+            # MAP FIELD NAMES FOR DATABASE
             claim_data_for_db = claim_data.copy()
             claim_data_for_db['total_claimed_amount'] = claim_data.get('total_amount', 0)
             
-            # Create initial claim record in database
+            # Create claim record FIRST before any audit logs
             print(f"Creating claim record: {claim_data['claim_id']}")
+            
+            # ✅ FIX: Check if claim_id already exists (extra safety)
+            existing_claim = None
+            try:
+                existing_claim = self.db.get_claim(claim_data['claim_id'])
+            except:
+                pass
+            
+            if existing_claim:
+                # Generate a new ID if somehow it still conflicts
+                claim_data['claim_id'] = f"CLM_{datetime.now().strftime('%Y%m%d%H%M%S')}_{str(uuid.uuid4())[:12].upper()}"
+                claim_data_for_db['claim_id'] = claim_data['claim_id']
+                print(f"Conflict detected, using new claim_id: {claim_data['claim_id']}")
+            
             db_claim_id = self.db.create_claim(claim_data_for_db)
             
-            # Log audit entry
+            if not db_claim_id:
+                raise Exception("Failed to create claim record in database")
+            
+            print(f"✓ Claim created successfully with ID: {claim_data['claim_id']}")
+            
+            # NOW we can log audit entry (after claim exists)
             self.db.log_audit(
                 claim_id=claim_data['claim_id'],
                 action='CREATED',
-                details={'file_path': file_path, 'claim_date': claim_date}
-            )
-            
-            # Store document upload record
-            file_ext = file_path.split('.')[-1]
-            self.db.create_document_upload(
-                claim_id=claim_data['claim_id'],
-                file_data={
-                    'file_name': os.path.basename(file_path),
-                    'file_type': file_ext,
-                    'file_path': file_path
+                details={
+                    'file_paths': {k: os.path.basename(v) for k, v in file_paths.items()},
+                    'claim_date': claim_date,
+                    'document_types': list(file_paths.keys())
                 }
             )
             
+            # Store ALL document uploads
+            for doc_type, file_path in file_paths.items():
+                file_ext = file_path.split('.')[-1]
+                file_size = os.path.getsize(file_path) if os.path.exists(file_path) else None
+                
+                self.db.create_document_upload(
+                    claim_id=claim_data['claim_id'],
+                    file_data={
+                        'file_name': os.path.basename(file_path),
+                        'file_type': file_ext,
+                        'file_path': file_path,
+                        'file_size': file_size,
+                        'document_type': doc_type
+                    }
+                )
+                
             # Step 1: Basic Eligibility Check
             print("Step 1: Checking basic eligibility...")
             eligibility = self.check_basic_eligibility(claim_data)
@@ -1505,18 +2106,32 @@ Return ONLY a JSON object with this structure:
                 )
             
             print(f"✓ Claim processing complete: {final_decision['decision']}")
+            print("\n================ FINAL JUDGMENT ================")
+            print(json.dumps(final_decision, indent=2))
+            print("================================================\n")
+
             return final_decision
             
         except Exception as e:
             print(f"✗ Error processing claim: {str(e)}")
-            # Log error in audit
+            print(traceback.format_exc())
+            
+            # Only log error audit if claim was created
             if claim_data.get('claim_id'):
-                self.db.log_audit(
-                    claim_id=claim_data['claim_id'],
-                    action='ERROR',
-                    details={'error': str(e)}
-                )
+                try:
+                    # Check if claim exists before logging
+                    existing_claim = self.db.get_claim(claim_data['claim_id'])
+                    if existing_claim:
+                        self.db.log_audit(
+                            claim_id=claim_data['claim_id'],
+                            action='ERROR',
+                            details={'error': str(e), 'traceback': traceback.format_exc()}
+                        )
+                except Exception as audit_error:
+                    print(f"Could not log audit error: {audit_error}")
+            
             raise e
+        
         
     def get_claim_from_db(self, claim_id: str) -> Optional[Dict]:
         """Retrieve complete claim data from database"""

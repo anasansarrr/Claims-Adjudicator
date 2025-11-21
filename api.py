@@ -48,47 +48,82 @@ def health_check():
             'timestamp': datetime.now().isoformat()
         }), 500
 
-
 @api_blueprint.route('/process-claim', methods=['POST'])
 def process_claim():
     """
-    Process a claim document and return adjudication result
+    Process a claim with multiple documents and return adjudication result
     
     Expected form data:
-        - file: Document file (PDF, image, or text)
+        - prescription: Prescription document (optional)
+        - medical_bill: Medical bill document (optional)
+        - pharmacy_bill: Pharmacy bill document (optional)
+        - lab_results: Lab results document (optional)
         - claim_date: Claim submission date (YYYY-MM-DD) - optional
+        - policy_id: Policy ID (optional)
+        - member_id: Member ID (optional)
+    
+    Note: At least one document must be provided
     
     Returns:
         JSON response with adjudication result
     """
-    file_path = None
+    file_paths = {}
+    saved_files = []
     
     try:
-        # Validate file presence
-        if 'file' not in request.files:
+        # Define allowed document types
+        allowed_doc_types = ['prescription', 'medical_bill', 'pharmacy_bill', 
+                            'lab_results', 'diagnostic_report']
+        
+        # Check if at least one file is provided
+        has_files = any(doc_type in request.files for doc_type in allowed_doc_types)
+        
+        if not has_files:
             return jsonify({
-                'error': 'No file provided',
-                'message': 'Please upload a file'
+                'error': 'No files provided',
+                'message': f'Please upload at least one document. Allowed types: {", ".join(allowed_doc_types)}',
+                'allowed_types': allowed_doc_types
             }), 400
         
-        file = request.files['file']
+        # Process each document type
+        for doc_type in allowed_doc_types:
+            if doc_type in request.files:
+                file = request.files[doc_type]
+                
+                # Skip empty files
+                if file.filename == '':
+                    continue
+                
+                # Validate file type
+                if not allowed_file(file.filename):
+                    return jsonify({
+                        'error': 'Invalid file type',
+                        'message': f'File "{file.filename}" has invalid type',
+                        'allowed_extensions': os.getenv("ALLOWED_EXTENSIONS"),
+                        'document_type': doc_type
+                    }), 400
+                
+                # Save file temporarily
+                filename = secure_filename(file.filename)
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                unique_filename = f"{timestamp}_{doc_type}_{filename}"
+                file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], unique_filename)
+                
+                print(f"[ENDPOINT] Saving {doc_type} file to: {file_path}")
+                file.save(file_path)
+                print(f"[ENDPOINT] {doc_type} file saved successfully")
+                
+                file_paths[doc_type] = file_path
+                saved_files.append(file_path)
         
-        # Validate filename
-        if file.filename == '':
+        # Verify we have at least one valid file
+        if not file_paths:
             return jsonify({
-                'error': 'Empty filename',
-                'message': 'Please select a valid file'
+                'error': 'No valid files provided',
+                'message': 'All uploaded files were empty or invalid'
             }), 400
         
-        # Validate file type
-        if not allowed_file(file.filename):
-            return jsonify({
-                'error': 'Invalid file type',
-                'message': f'Allowed types: {os.getenv("ALLOWED_EXTENSIONS")}',
-                'filename': file.filename
-            }), 400
-        
-        # Get claim date from form data
+        # Get optional parameters from form data
         claim_date = request.form.get('claim_date')
         if not claim_date:
             claim_date = datetime.now().strftime('%Y-%m-%d')
@@ -103,34 +138,35 @@ def process_claim():
                 'provided_date': claim_date
             }), 400
         
-        # Save file temporarily
-        filename = secure_filename(file.filename)
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        unique_filename = f"{timestamp}_{filename}"
-        file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], unique_filename)
+        policy_id = request.form.get('policy_id')
+        member_id = request.form.get('member_id')
         
-        print(f"[ENDPOINT] Saving file to: {file_path}")
-        file.save(file_path)
-        print(f"[ENDPOINT] File saved successfully")
-        
-        # Process the claim
+        # Process the claim with multiple documents
         print(f"[ENDPOINT] Getting processor...")
         processor = get_processor()
-        print(f"[ENDPOINT] Processor type: {type(processor)}")
+        print(f"[ENDPOINT] Processing {len(file_paths)} documents: {list(file_paths.keys())}")
         print(f"[ENDPOINT] Calling process_claim_complete...")
         
         result = processor.process_claim_complete(
-            file_path=file_path, 
-            claim_date=claim_date
+            file_paths=file_paths,
+            claim_date=claim_date,
+            policy_id=policy_id,
+            member_id=member_id
         )
         
         print(f"[ENDPOINT] Processing complete, result decision: {result.get('decision')}")
         
         # Add processing metadata
         result['metadata'] = {
-            'original_filename': filename,
+            'documents_processed': {
+                doc_type: {
+                    'filename': os.path.basename(path),
+                    'file_size_bytes': os.path.getsize(path)
+                }
+                for doc_type, path in file_paths.items()
+            },
             'processed_at': datetime.now().isoformat(),
-            'file_size_bytes': os.path.getsize(file_path)
+            'total_documents': len(file_paths)
         }
         
         return jsonify({
@@ -151,17 +187,19 @@ def process_claim():
             'message': str(e),
             'type': type(e).__name__,
             'traceback': traceback.format_exc(),
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'documents_attempted': list(file_paths.keys()) if file_paths else []
         }), 500
     
     finally:
-        # Clean up uploaded file
-        if file_path and os.path.exists(file_path):
-            print(f"[ENDPOINT] Cleaning up file: {file_path}")
-            try:
-                os.remove(file_path)
-            except Exception as e:
-                print(f"[ENDPOINT] Warning: Could not delete file: {e}")
+        # Clean up all uploaded files
+        for file_path in saved_files:
+            if os.path.exists(file_path):
+                print(f"[ENDPOINT] Cleaning up file: {file_path}")
+                try:
+                    os.remove(file_path)
+                except Exception as e:
+                    print(f"[ENDPOINT] Warning: Could not delete file: {e}")
 
 @api_blueprint.route('/extract-data', methods=['POST'])
 def extract_data():

@@ -424,8 +424,9 @@ class DatabaseManager:
         """Record document upload"""
         query = """
             INSERT INTO document_uploads (
-                claim_id, file_name, file_type, file_size, file_path, storage_url
-            ) VALUES (%s, %s, %s, %s, %s, %s)
+                claim_id, file_name, file_type, file_size, file_path, 
+                storage_url, document_type
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """
         params = (
@@ -434,7 +435,8 @@ class DatabaseManager:
             file_data['file_type'],
             file_data.get('file_size'),
             file_data['file_path'],
-            file_data.get('storage_url')
+            file_data.get('storage_url'),
+            file_data.get('document_type', 'general')  # NEW FIELD
         )
         result = self.execute_query(query, params)
         return str(result[0]['id']) if result else None
@@ -526,3 +528,20 @@ class DatabaseManager:
     def close(self):
         """Close all database connections"""
         self.pool.closeall()
+        
+    def get_claim_documents_by_type(self, claim_id: str, doc_type: str = None) -> List[Dict]:
+        """Get documents for a claim, optionally filtered by type"""
+        if doc_type:
+            query = """
+                SELECT * FROM document_uploads
+                WHERE claim_id = %s AND document_type = %s
+                ORDER BY uploaded_at DESC
+            """
+            return self.execute_query(query, (claim_id, doc_type))
+        else:
+            query = """
+                SELECT * FROM document_uploads
+                WHERE claim_id = %s
+                ORDER BY document_type, uploaded_at DESC
+            """
+            return self.execute_query(query, (claim_id,))

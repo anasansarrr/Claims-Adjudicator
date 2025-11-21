@@ -1,21 +1,26 @@
-
 # Database
-psycopg[binary]==3.1.18
+psycopg2-binary==2.9.9
 
 # Web Framework
 Flask==3.0.0
 flask-cors==4.0.0
+Werkzeug==3.0.1
+gunicorn
 
-# AI/ML
+# AI/ML & OCR
 openai==1.3.0
 paddlepaddle==2.6.2
 paddleocr==2.7.0
+pytesseract==0.3.10
 
 # Document Processing
-PyMuPDF==1.20.0
+PyMuPDF==1.22.5
 pdfplumber==0.10.3
 Pillow==10.1.0
 
-# Utilities
+# Utils
 python-dotenv==1.0.0
 requests==2.31.0
+
+# Extra
+uuid==1.30      # Only needed if you directly import uuid (otherwise builtin)

@@ -1,541 +1,841 @@
 """
-Medical Document Generator
-Generates sample OPD documents: Prescriptions, Bills, Lab Reports, Pharmacy Bills
+Medical OPD Document Generator
+Generates realistic medical documents (prescriptions, bills, reports) with PDF output,
+handwriting simulation, and OCR testing features.
+
+Requirements:
+pip install reportlab pillow numpy
 """
 
 import random
 from datetime import datetime, timedelta
-from dataclasses import dataclass
-from typing import Optional
-import json
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
+from reportlab.pdfgen import canvas
+from PIL import Image as PILImage, ImageDraw, ImageFont, ImageFilter
+import io
+import numpy as np
 
 # Sample Data
+STATES = ['KA', 'MH', 'DL', 'TN', 'UP', 'WB', 'GJ', 'RJ']
 DOCTORS = [
-    {"name": "Dr. Rajesh Kumar", "qual": "MBBS, MD", "reg": "KA/12345/2015", "specialty": "General Medicine"},
-    {"name": "Dr. Priya Sharma", "qual": "MBBS, DNB", "reg": "MH/67890/2018", "specialty": "Pediatrics"},
-    {"name": "Dr. Amit Patel", "qual": "MBBS, MS", "reg": "DL/34567/2020", "specialty": "Orthopedics"},
-    {"name": "Dr. Sunita Reddy", "qual": "MBBS, DM", "reg": "TN/45678/2016", "specialty": "Cardiology"},
-    {"name": "Dr. Vikram Singh", "qual": "MBBS, MD", "reg": "UP/23456/2019", "specialty": "Dermatology"},
-]
-
-HOSPITALS = [
-    {"name": "City Care Hospital", "addr": "123 MG Road, Bangalore 560001", "gst": "29AABCT1234F1ZP", "phone": "080-12345678"},
-    {"name": "LifeLine Medical Center", "addr": "456 Link Road, Mumbai 400050", "gst": "27AABCL5678G1ZQ", "phone": "022-87654321"},
-    {"name": "Apollo Clinic", "addr": "789 Nehru Place, Delhi 110019", "gst": "07AABCA9012H1ZR", "phone": "011-23456789"},
-    {"name": "Fortis Healthcare", "addr": "321 Anna Nagar, Chennai 600040", "gst": "33AABCF3456I1ZS", "phone": "044-98765432"},
-]
-
-PHARMACIES = [
-    {"name": "MedPlus Pharmacy", "license": "KA-BLR-2345", "gst": "29AABCM1234J1ZT"},
-    {"name": "Apollo Pharmacy", "license": "MH-MUM-6789", "gst": "27AABCA5678K1ZU"},
-    {"name": "Netmeds Store", "license": "DL-DEL-3456", "gst": "07AABCN9012L1ZV"},
+    {'name': 'Dr. Rajesh Kumar', 'qualification': 'MBBS, MD (Medicine)', 'specialty': 'General Medicine'},
+    {'name': 'Dr. Priya Sharma', 'qualification': 'MBBS, MS (Surgery)', 'specialty': 'Surgery'},
+    {'name': 'Dr. Anil Mehta', 'qualification': 'MBBS, DM (Cardiology)', 'specialty': 'Cardiology'},
+    {'name': 'Dr. Sneha Patel', 'qualification': 'MBBS, MD (Pediatrics)', 'specialty': 'Pediatrics'},
 ]
 
 DIAGNOSES = [
-    ("Viral Fever", ["Fever", "Body ache", "Fatigue"]),
-    ("Upper Respiratory Tract Infection", ["Cough", "Cold", "Sore throat"]),
-    ("Gastroenteritis", ["Loose stools", "Abdominal pain", "Nausea"]),
-    ("Migraine", ["Headache", "Nausea", "Photophobia"]),
-    ("Allergic Rhinitis", ["Sneezing", "Runny nose", "Itchy eyes"]),
-    ("Lower Back Pain", ["Back pain", "Stiffness", "Limited mobility"]),
-    ("Hypertension", ["Headache", "Dizziness", "Routine checkup"]),
-    ("Type 2 Diabetes", ["Increased thirst", "Frequent urination", "Fatigue"]),
+    'Viral Fever', 'Upper Respiratory Tract Infection', 'Gastroenteritis',
+    'Hypertension', 'Type 2 Diabetes Mellitus', 'Migraine', 'Allergic Rhinitis',
+    'Lower Back Pain', 'Urinary Tract Infection', 'Acute Bronchitis'
 ]
 
 MEDICINES = [
-    {"name": "Paracetamol", "strength": "500mg", "form": "Tab", "price": 2.5},
-    {"name": "Paracetamol", "strength": "650mg", "form": "Tab", "price": 3.0},
-    {"name": "Amoxicillin", "strength": "500mg", "form": "Cap", "price": 12.0},
-    {"name": "Azithromycin", "strength": "500mg", "form": "Tab", "price": 45.0},
-    {"name": "Omeprazole", "strength": "20mg", "form": "Cap", "price": 8.0},
-    {"name": "Cetirizine", "strength": "10mg", "form": "Tab", "price": 3.5},
-    {"name": "Metformin", "strength": "500mg", "form": "Tab", "price": 2.0},
-    {"name": "Amlodipine", "strength": "5mg", "form": "Tab", "price": 4.5},
-    {"name": "Pantoprazole", "strength": "40mg", "form": "Tab", "price": 10.0},
-    {"name": "Ibuprofen", "strength": "400mg", "form": "Tab", "price": 5.0},
-    {"name": "Ondansetron", "strength": "4mg", "form": "Tab", "price": 15.0},
-    {"name": "Ranitidine", "strength": "150mg", "form": "Tab", "price": 6.0},
+    {'name': 'Paracetamol', 'strength': '650mg', 'type': 'Tab', 'dosage': '1-0-1', 'price': 5},
+    {'name': 'Amoxicillin', 'strength': '500mg', 'type': 'Cap', 'dosage': '1-0-1', 'price': 12},
+    {'name': 'Azithromycin', 'strength': '500mg', 'type': 'Tab', 'dosage': '1-0-0', 'price': 25},
+    {'name': 'Omeprazole', 'strength': '20mg', 'type': 'Cap', 'dosage': '1-0-0', 'price': 8},
+    {'name': 'Cetirizine', 'strength': '10mg', 'type': 'Tab', 'dosage': '0-0-1', 'price': 3},
+    {'name': 'Metformin', 'strength': '500mg', 'type': 'Tab', 'dosage': '1-0-1', 'price': 6},
+    {'name': 'Amlodipine', 'strength': '5mg', 'type': 'Tab', 'dosage': '0-0-1', 'price': 4},
 ]
 
-LAB_TESTS = {
-    "CBC": [
-        ("Hemoglobin", "g/dL", 12.0, 17.0),
-        ("WBC Count", "/cumm", 4000, 11000),
-        ("RBC Count", "million/cumm", 4.5, 5.5),
-        ("Platelets", "/cumm", 150000, 450000),
-        ("PCV", "%", 36, 50),
-    ],
-    "LFT": [
-        ("SGPT (ALT)", "U/L", 10, 40),
-        ("SGOT (AST)", "U/L", 10, 40),
-        ("Bilirubin Total", "mg/dL", 0.2, 1.2),
-        ("Alkaline Phosphatase", "U/L", 44, 147),
-        ("Total Protein", "g/dL", 6.0, 8.3),
-    ],
-    "KFT": [
-        ("Blood Urea", "mg/dL", 15, 40),
-        ("Serum Creatinine", "mg/dL", 0.7, 1.3),
-        ("Uric Acid", "mg/dL", 3.5, 7.2),
-        ("Sodium", "mEq/L", 136, 145),
-        ("Potassium", "mEq/L", 3.5, 5.1),
-    ],
-    "Lipid Profile": [
-        ("Total Cholesterol", "mg/dL", 125, 200),
-        ("Triglycerides", "mg/dL", 50, 150),
-        ("HDL Cholesterol", "mg/dL", 40, 60),
-        ("LDL Cholesterol", "mg/dL", 60, 130),
-        ("VLDL", "mg/dL", 10, 40),
-    ],
-    "Blood Sugar": [
-        ("Fasting Blood Sugar", "mg/dL", 70, 100),
-        ("Post Prandial Blood Sugar", "mg/dL", 80, 140),
-        ("HbA1c", "%", 4.0, 5.6),
-    ],
-}
-
-PATIENT_NAMES = [
-    "Rahul Verma", "Sneha Gupta", "Mohammed Ali", "Lakshmi Iyer", "Deepak Joshi",
-    "Ananya Singh", "Karthik Nair", "Pooja Mehta", "Suresh Babu", "Fatima Khan",
-    "Vijay Kumar", "Meera Patel", "Arjun Reddy", "Divya Sharma", "Ravi Shankar",
+TESTS = [
+    {'name': 'Complete Blood Count (CBC)', 'price': 300},
+    {'name': 'Blood Sugar (Fasting)', 'price': 80},
+    {'name': 'Lipid Profile', 'price': 500},
+    {'name': 'Liver Function Test (LFT)', 'price': 600},
+    {'name': 'Kidney Function Test (KFT)', 'price': 550},
+    {'name': 'Thyroid Profile', 'price': 450},
+    {'name': 'Urine Routine', 'price': 150},
+    {'name': 'X-Ray Chest', 'price': 400},
+    {'name': 'ECG', 'price': 200},
 ]
 
-def random_date(start_days_ago=30, end_days_ago=0):
-    """Generate random date within range"""
-    days = random.randint(end_days_ago, start_days_ago)
-    return datetime.now() - timedelta(days=days)
+PATIENT_NAMES = ['Ramesh Singh', 'Anjali Desai', 'Vikram Reddy', 'Pooja Iyer', 'Suresh Joshi']
 
-def generate_batch_number():
-    return f"{random.choice('ABCDEFGHIJ')}{random.choice('KLMNOPQRST')}{random.randint(100,999)}"
 
-def generate_expiry_date():
-    months = random.randint(6, 36)
-    exp = datetime.now() + timedelta(days=months*30)
-    return exp.strftime("%m/%Y")
-
-# Document Generators
-class PrescriptionGenerator:
-    @staticmethod
-    def generate() -> dict:
+class MedicalDocumentGenerator:
+    def __init__(self, output_dir='generated_docs'):
+        self.output_dir = output_dir
+        import os
+        os.makedirs(output_dir, exist_ok=True)
+    
+    def generate_random_patient(self):
+        """Generate random patient details"""
+        return {
+            'name': random.choice(PATIENT_NAMES),
+            'age': random.randint(18, 75),
+            'sex': random.choice(['M', 'F']),
+            'contact': f'+91 {random.randint(7000000000, 9999999999)}',
+            'address': f'{random.randint(1, 999)}, {random.choice(["MG Road", "Park Street", "Nehru Nagar"])}, {random.choice(["Mumbai", "Delhi", "Bangalore"])}'
+        }
+    
+    def generate_registration_number(self):
+        """Generate doctor registration number"""
+        state = random.choice(STATES)
+        number = random.randint(10000, 99999)
+        year = random.randint(2010, 2023)
+        return f'{state}/{number}/{year}'
+    
+    def generate_prescription(self, filename='prescription.pdf', add_noise=False):
+        """Generate a medical prescription"""
+        doc = SimpleDocTemplate(f'{self.output_dir}/{filename}', pagesize=A4)
+        story = []
+        styles = getSampleStyleSheet()
+        
+        # Header Style
+        header_style = ParagraphStyle(
+            'CustomHeader',
+            parent=styles['Heading1'],
+            fontSize=16,
+            textColor=colors.HexColor('#1a5490'),
+            spaceAfter=12,
+            alignment=TA_CENTER
+        )
+        
+        # Select doctor
         doctor = random.choice(DOCTORS)
-        hospital = random.choice(HOSPITALS)
-        diagnosis, symptoms = random.choice(DIAGNOSES)
-        patient = random.choice(PATIENT_NAMES)
-        age = random.randint(18, 75)
-        sex = random.choice(["M", "F"])
-        date = random_date()
+        patient = self.generate_random_patient()
+        reg_no = self.generate_registration_number()
         
-        # Select medicines
-        num_meds = random.randint(2, 5)
-        prescribed_meds = random.sample(MEDICINES, num_meds)
+        # Header
+        story.append(Paragraph(f"<b>{doctor['name']}</b>", header_style))
+        story.append(Paragraph(doctor['qualification'], styles['Normal']))
+        story.append(Paragraph(f"Reg. No: {reg_no}", styles['Normal']))
+        story.append(Paragraph(f"Specialty: {doctor['specialty']}", styles['Normal']))
+        story.append(Spacer(1, 0.3*inch))
         
-        prescriptions = []
-        for med in prescribed_meds:
-            dosage = random.choice(["1-0-1", "1-1-1", "0-0-1", "1-0-0", "SOS"])
-            duration = random.choice([3, 5, 7, 10, 14, 30])
-            prescriptions.append({
-                "medicine": f"{med['form']}. {med['name']} {med['strength']}",
-                "dosage": dosage,
-                "duration": f"{duration} days",
-                "instructions": random.choice(["After food", "Before food", "With food", ""])
-            })
+        # Date
+        date = datetime.now() - timedelta(days=random.randint(0, 30))
+        story.append(Paragraph(f"Date: {date.strftime('%d/%m/%Y')}", styles['Normal']))
+        story.append(Spacer(1, 0.2*inch))
+        
+        # Patient Details
+        story.append(Paragraph(f"<b>Patient Name:</b> {patient['name']}", styles['Normal']))
+        story.append(Paragraph(f"<b>Age/Sex:</b> {patient['age']}/{patient['sex']}", styles['Normal']))
+        story.append(Spacer(1, 0.2*inch))
+        
+        # Diagnosis
+        diagnosis = random.choice(DIAGNOSES)
+        story.append(Paragraph(f"<b>Diagnosis:</b> {diagnosis}", styles['Normal']))
+        story.append(Spacer(1, 0.2*inch))
+        
+        # Prescription
+        story.append(Paragraph("<b>Rx (Prescription):</b>", styles['Heading2']))
+        num_medicines = random.randint(2, 5)
+        selected_meds = random.sample(MEDICINES, num_medicines)
+        
+        for i, med in enumerate(selected_meds, 1):
+            duration = random.choice(['5 days', '7 days', '10 days', '14 days'])
+            story.append(Paragraph(
+                f"{i}. {med['type']}. {med['name']} {med['strength']}<br/>"
+                f"   {med['dosage']} x {duration}",
+                styles['Normal']
+            ))
+        
+        story.append(Spacer(1, 0.2*inch))
         
         # Investigations
-        investigations = random.sample(list(LAB_TESTS.keys()), random.randint(0, 3))
+        if random.random() > 0.5:
+            story.append(Paragraph("<b>Investigations Advised:</b>", styles['Heading2']))
+            num_tests = random.randint(1, 3)
+            for test in random.sample(TESTS, num_tests):
+                story.append(Paragraph(f"- {test['name']}", styles['Normal']))
         
-        return {
-            "type": "prescription",
-            "hospital": hospital,
-            "doctor": doctor,
-            "patient": {"name": patient, "age": age, "sex": sex},
-            "date": date.strftime("%d/%m/%Y"),
-            "symptoms": random.sample(symptoms, min(len(symptoms), random.randint(1, 3))),
-            "diagnosis": diagnosis,
-            "prescriptions": prescriptions,
-            "investigations": investigations,
-            "followup": (date + timedelta(days=random.choice([7, 14, 30]))).strftime("%d/%m/%Y")
-        }
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Follow-up
+        followup = date + timedelta(days=random.randint(7, 21))
+        story.append(Paragraph(f"<b>Follow-up:</b> {followup.strftime('%d/%m/%Y')}", styles['Normal']))
+        
+        story.append(Spacer(1, 0.5*inch))
+        story.append(Paragraph(f"<i>{doctor['name']}</i>", styles['Normal']))
+        
+        # Build PDF
+        doc.build(story)
+        
+        # Add noise if requested
+        if add_noise:
+            self.add_noise_to_pdf(f'{self.output_dir}/{filename}')
+        
+        return f'{self.output_dir}/{filename}'
     
-    @staticmethod
-    def to_text(data: dict) -> str:
-        lines = [
-            "=" * 50,
-            f"{data['hospital']['name']}".center(50),
-            f"{data['hospital']['addr']}".center(50),
-            f"Phone: {data['hospital']['phone']}".center(50),
-            "=" * 50,
-            f"{data['doctor']['name']}, {data['doctor']['qual']}",
-            f"Reg. No: {data['doctor']['reg']} | {data['doctor']['specialty']}",
-            "-" * 50,
-            f"Date: {data['date']}",
-            "",
-            f"Patient Name: {data['patient']['name']}",
-            f"Age/Sex: {data['patient']['age']} yrs / {data['patient']['sex']}",
-            "",
-            "Chief Complaints:",
-        ]
-        for s in data['symptoms']:
-            lines.append(f"  • {s}")
+    def generate_medical_bill(self, filename='medical_bill.pdf', add_noise=False):
+        """Generate a medical bill/invoice"""
+        doc = SimpleDocTemplate(f'{self.output_dir}/{filename}', pagesize=A4)
+        story = []
+        styles = getSampleStyleSheet()
         
-        lines.extend([
-            "",
-            f"Diagnosis: {data['diagnosis']}",
-            "",
-            "Rx",
-            "-" * 30,
-        ])
+        # Header
+        header_style = ParagraphStyle(
+            'BillHeader',
+            parent=styles['Heading1'],
+            fontSize=18,
+            textColor=colors.HexColor('#2c3e50'),
+            alignment=TA_CENTER,
+            spaceAfter=20
+        )
         
-        for i, p in enumerate(data['prescriptions'], 1):
-            lines.append(f"{i}. {p['medicine']}")
-            lines.append(f"   {p['dosage']} x {p['duration']} {p['instructions']}")
+        clinic_name = random.choice(['City Hospital', 'HealthCare Clinic', 'MediPlus Hospital'])
+        story.append(Paragraph(f"<b>{clinic_name}</b>", header_style))
+        story.append(Paragraph("Medical Bill/Invoice", styles['Heading2']))
+        story.append(Spacer(1, 0.2*inch))
         
-        if data['investigations']:
-            lines.extend(["", "Investigations Advised:"])
-            for inv in data['investigations']:
-                lines.append(f"  • {inv}")
+        # Bill details
+        bill_no = random.randint(10000, 99999)
+        date = datetime.now() - timedelta(days=random.randint(0, 30))
+        patient = self.generate_random_patient()
         
-        lines.extend([
-            "",
-            f"Follow-up: {data['followup']}",
-            "",
-            f"{'_' * 20}".rjust(40),
-            f"{data['doctor']['name']}".rjust(40),
-            "=" * 50
-        ])
-        return "\n".join(lines)
-
-
-class MedicalBillGenerator:
-    @staticmethod
-    def generate() -> dict:
-        hospital = random.choice(HOSPITALS)
-        doctor = random.choice(DOCTORS)
-        patient = random.choice(PATIENT_NAMES)
-        date = random_date()
+        story.append(Paragraph(f"Bill No: <b>{bill_no}</b>  |  Date: <b>{date.strftime('%d/%m/%Y')}</b>", styles['Normal']))
+        story.append(Spacer(1, 0.2*inch))
         
-        items = []
-        # Consultation
-        consult_fee = random.choice([300, 500, 700, 1000, 1500])
-        items.append({"desc": "Consultation Fee", "amount": consult_fee})
+        story.append(Paragraph(f"<b>Patient Name:</b> {patient['name']}", styles['Normal']))
+        story.append(Paragraph(f"<b>Contact:</b> {patient['contact']}", styles['Normal']))
+        story.append(Spacer(1, 0.3*inch))
         
-        # Random tests
+        # Bill items table
+        data = [['S.No', 'Particulars', 'Amount (₹)']]
+        
+        # Consultation fee
+        consultation_fee = random.choice([500, 700, 1000, 1500])
+        data.append(['1', 'Consultation Fee', f'{consultation_fee:.2f}'])
+        
+        subtotal = consultation_fee
+        row_num = 2
+        
+        # Add tests
         if random.random() > 0.3:
-            tests = random.sample(list(LAB_TESTS.keys()), random.randint(1, 3))
-            for test in tests:
-                items.append({"desc": f"Test - {test}", "amount": random.choice([200, 350, 500, 800, 1200])})
+            num_tests = random.randint(1, 3)
+            for test in random.sample(TESTS, num_tests):
+                data.append([str(row_num), test['name'], f'{test["price"]:.2f}'])
+                subtotal += test['price']
+                row_num += 1
         
-        # Procedures
-        if random.random() > 0.6:
-            procedures = ["Dressing", "Injection", "Nebulization", "ECG", "BP Check"]
-            for proc in random.sample(procedures, random.randint(1, 2)):
-                items.append({"desc": proc, "amount": random.choice([50, 100, 150, 200, 300])})
+        # Add medicines
+        if random.random() > 0.4:
+            num_meds = random.randint(2, 4)
+            for med in random.sample(MEDICINES, num_meds):
+                qty = random.randint(5, 30)
+                amount = med['price'] * qty
+                data.append([str(row_num), f"{med['name']} {med['strength']} x{qty}", f'{amount:.2f}'])
+                subtotal += amount
+                row_num += 1
         
-        subtotal = sum(item['amount'] for item in items)
-        gst = round(subtotal * 0.05, 2) if random.random() > 0.5 else 0
-        discount = round(subtotal * random.choice([0, 0, 0.05, 0.1]), 2)
-        total = subtotal + gst - discount
+        # Totals
+        data.append(['', '', ''])
+        data.append(['', 'Sub Total:', f'{subtotal:.2f}'])
+        gst = subtotal * 0.18
+        data.append(['', 'GST (18%):', f'{gst:.2f}'])
+        total = subtotal + gst
+        data.append(['', '<b>TOTAL:</b>', f'<b>{total:.2f}</b>'])
         
-        return {
-            "type": "medical_bill",
-            "bill_no": f"BILL{random.randint(10000, 99999)}",
-            "hospital": hospital,
-            "doctor": doctor,
-            "patient": {"name": patient, "contact": f"+91 {random.randint(7000000000, 9999999999)}"},
-            "date": date.strftime("%d/%m/%Y"),
-            "items": items,
-            "subtotal": subtotal,
-            "gst": gst,
-            "discount": discount,
-            "total": total,
-            "payment_mode": random.choice(["Cash", "Card", "UPI", "Insurance"]),
-        }
+        # Create table
+        table = Table(data, colWidths=[0.8*inch, 4*inch, 1.5*inch])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, -1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -4), 1, colors.black),
+            ('LINEABOVE', (1, -3), (-1, -3), 1, colors.black),
+            ('LINEABOVE', (1, -1), (-1, -1), 2, colors.black),
+        ]))
+        
+        story.append(table)
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Payment details
+        payment_mode = random.choice(['Cash', 'Card', 'UPI'])
+        story.append(Paragraph(f"<b>Payment Mode:</b> {payment_mode}", styles['Normal']))
+        
+        if payment_mode in ['Card', 'UPI']:
+            trans_id = ''.join(random.choices('0123456789ABCDEF', k=12))
+            story.append(Paragraph(f"<b>Transaction ID:</b> {trans_id}", styles['Normal']))
+        
+        doc.build(story)
+        
+        if add_noise:
+            self.add_noise_to_pdf(f'{self.output_dir}/{filename}')
+        
+        return f'{self.output_dir}/{filename}'
     
-    @staticmethod
-    def to_text(data: dict) -> str:
-        lines = [
-            "=" * 55,
-            f"{data['hospital']['name']}".center(55),
-            f"{data['hospital']['addr']}".center(55),
-            f"GST: {data['hospital']['gst']}".center(55),
-            "=" * 55,
-            f"Bill No: {data['bill_no']}".ljust(30) + f"Date: {data['date']}",
-            "-" * 55,
-            f"Patient: {data['patient']['name']}",
-            f"Contact: {data['patient']['contact']}",
-            f"Ref. By: {data['doctor']['name']}",
-            "-" * 55,
-            f"{'PARTICULARS':<35} {'AMOUNT':>15}",
-            "-" * 55,
+    def generate_diagnostic_report(self, filename='diagnostic_report.pdf', add_noise=False):
+        """Generate a diagnostic test report"""
+        doc = SimpleDocTemplate(f'{self.output_dir}/{filename}', pagesize=A4)
+        story = []
+        styles = getSampleStyleSheet()
+        
+        # Header
+        story.append(Paragraph("<b>DIAGNOSTIC CENTER</b>", styles['Title']))
+        story.append(Paragraph("NABL Accredited Lab", styles['Normal']))
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Patient details
+        patient = self.generate_random_patient()
+        date = datetime.now() - timedelta(days=random.randint(0, 7))
+        report_id = f"RPT{random.randint(100000, 999999)}"
+        
+        story.append(Paragraph(f"<b>Patient Name:</b> {patient['name']}", styles['Normal']))
+        story.append(Paragraph(f"<b>Age/Sex:</b> {patient['age']}/{patient['sex']}", styles['Normal']))
+        story.append(Paragraph(f"<b>Report ID:</b> {report_id}", styles['Normal']))
+        story.append(Paragraph(f"<b>Date:</b> {date.strftime('%d/%m/%Y')}", styles['Normal']))
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Test results
+        story.append(Paragraph("<b>COMPLETE BLOOD COUNT (CBC)</b>", styles['Heading2']))
+        
+        # CBC results table
+        cbc_data = [
+            ['Test Name', 'Result', 'Normal Range', 'Unit'],
+            ['Hemoglobin', f'{random.uniform(12, 16):.1f}', '13-17', 'g/dL'],
+            ['WBC Count', f'{random.randint(4000, 11000)}', '4000-11000', '/cumm'],
+            ['RBC Count', f'{random.uniform(4.5, 5.5):.2f}', '4.5-5.5', 'million/cumm'],
+            ['Platelets', f'{random.randint(150000, 450000)}', '150000-450000', '/cumm'],
         ]
         
-        for item in data['items']:
-            lines.append(f"{item['desc']:<35} ₹{item['amount']:>12,.2f}")
+        table = Table(cbc_data, colWidths=[2*inch, 1.2*inch, 1.5*inch, 1*inch])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ]))
         
-        lines.extend([
-            "-" * 55,
-            f"{'Sub Total:':<35} ₹{data['subtotal']:>12,.2f}",
-        ])
+        story.append(table)
+        story.append(Spacer(1, 0.5*inch))
+        story.append(Paragraph("<i>End of Report</i>", styles['Normal']))
         
-        if data['gst'] > 0:
-            lines.append(f"{'GST (5%):':<35} ₹{data['gst']:>12,.2f}")
-        if data['discount'] > 0:
-            lines.append(f"{'Discount:':<35} -₹{data['discount']:>11,.2f}")
+        doc.build(story)
         
-        lines.extend([
-            "=" * 55,
-            f"{'TOTAL:':<35} ₹{data['total']:>12,.2f}",
-            "=" * 55,
-            f"Payment Mode: {data['payment_mode']}",
-            "",
-            "Authorized Signatory".rjust(45),
-            "=" * 55
-        ])
-        return "\n".join(lines)
-
-
-class LabReportGenerator:
-    @staticmethod
-    def generate() -> dict:
-        hospital = random.choice(HOSPITALS)
-        doctor = random.choice(DOCTORS)
-        patient = random.choice(PATIENT_NAMES)
-        age = random.randint(20, 70)
-        sex = random.choice(["M", "F"])
-        date = random_date()
+        if add_noise:
+            self.add_noise_to_pdf(f'{self.output_dir}/{filename}')
         
-        # Select tests
-        selected_tests = random.sample(list(LAB_TESTS.keys()), random.randint(1, 3))
-        
-        results = {}
-        for test_name in selected_tests:
-            test_results = []
-            for param, unit, low, high in LAB_TESTS[test_name]:
-                # Generate value (mostly normal, sometimes abnormal)
-                if random.random() > 0.2:
-                    value = round(random.uniform(low, high), 2)
-                else:
-                    value = round(random.uniform(low * 0.7, high * 1.3), 2)
+        return f'{self.output_dir}/{filename}'
+    
+    def add_noise_to_pdf(self, pdf_path):
+        """Convert PDF to image and add noise for OCR testing"""
+        try:
+            from pdf2image import convert_from_path
+            images = convert_from_path(pdf_path, dpi=150)
+            
+            for i, img in enumerate(images):
+                # Convert to numpy array
+                img_array = np.array(img)
                 
-                status = "Normal" if low <= value <= high else ("High" if value > high else "Low")
-                test_results.append({
-                    "parameter": param,
-                    "value": value,
-                    "unit": unit,
-                    "range": f"{low}-{high}",
-                    "status": status
-                })
-            results[test_name] = test_results
-        
-        return {
-            "type": "lab_report",
-            "report_id": f"LAB{random.randint(100000, 999999)}",
-            "hospital": hospital,
-            "doctor": doctor,
-            "patient": {"name": patient, "age": age, "sex": sex},
-            "date": date.strftime("%d/%m/%Y"),
-            "collection_time": f"{random.randint(6,11)}:{random.choice(['00','15','30','45'])} AM",
-            "results": results,
-            "pathologist": f"Dr. {random.choice(['S. Mehta', 'R. Gupta', 'K. Rao', 'P. Das'])}"
-        }
+                # Add Gaussian noise
+                noise = np.random.normal(0, 10, img_array.shape)
+                noisy_img = np.clip(img_array + noise, 0, 255).astype(np.uint8)
+                
+                # Convert back to PIL Image
+                noisy_pil = PILImage.fromarray(noisy_img)
+                
+                # Apply slight blur
+                noisy_pil = noisy_pil.filter(ImageFilter.GaussianBlur(radius=0.5))
+                
+                # Save
+                output_path = pdf_path.replace('.pdf', f'_noisy_page{i+1}.png')
+                noisy_pil.save(output_path)
+                print(f"Noisy image saved: {output_path}")
+        except ImportError:
+            print("pdf2image not installed. Skipping noise addition. Install with: pip install pdf2image")
     
-    @staticmethod
-    def to_text(data: dict) -> str:
-        lines = [
-            "=" * 65,
-            f"{data['hospital']['name']} - DIAGNOSTIC CENTER".center(65),
-            f"{data['hospital']['addr']}".center(65),
-            "NABL Accredited".center(65),
-            "=" * 65,
-            f"Report ID: {data['report_id']}".ljust(35) + f"Date: {data['date']}",
-            f"Patient: {data['patient']['name']}".ljust(35) + f"Collection: {data['collection_time']}",
-            f"Age/Sex: {data['patient']['age']} yrs / {data['patient']['sex']}".ljust(35) + f"Ref: {data['doctor']['name']}",
-            "=" * 65,
-        ]
+    def generate_pharmacy_bill(self, filename='pharmacy_bill.pdf', patient_info=None, medicines_list=None, add_noise=False):
+        """Generate a pharmacy bill"""
+        doc = SimpleDocTemplate(f'{self.output_dir}/{filename}', pagesize=A4)
+        story = []
+        styles = getSampleStyleSheet()
         
-        for test_name, params in data['results'].items():
-            lines.extend([
-                "",
-                f">>> {test_name.upper()} <<<",
-                "-" * 65,
-                f"{'PARAMETER':<25} {'VALUE':>10} {'UNIT':<12} {'RANGE':<12} {'STATUS':<8}",
-                "-" * 65,
+        # Header
+        header_style = ParagraphStyle(
+            'PharmacyHeader',
+            parent=styles['Heading1'],
+            fontSize=18,
+            textColor=colors.HexColor('#16a085'),
+            alignment=TA_CENTER,
+            spaceAfter=20
+        )
+        
+        pharmacy_name = random.choice(['MedPlus Pharmacy', 'Apollo Pharmacy', 'NetMeds Retail'])
+        story.append(Paragraph(f"<b>{pharmacy_name}</b>", header_style))
+        story.append(Paragraph("Licensed Retail Pharmacy", styles['Normal']))
+        
+        # License details
+        license_no = f"DL-{random.randint(10000, 99999)}"
+        gst_no = f"{random.randint(10, 99)}XXXXX{random.randint(1000, 9999)}Z{random.randint(1, 9)}"
+        story.append(Paragraph(f"Drug License No: {license_no}", styles['Normal']))
+        story.append(Paragraph(f"GST No: {gst_no}", styles['Normal']))
+        story.append(Spacer(1, 0.2*inch))
+        
+        # Bill details
+        bill_no = random.randint(10000, 99999)
+        date = datetime.now() - timedelta(days=random.randint(0, 30))
+        
+        if patient_info is None:
+            patient_info = self.generate_random_patient()
+        
+        story.append(Paragraph(f"Bill No: <b>PH-{bill_no}</b>  |  Date: <b>{date.strftime('%d/%m/%Y %H:%M')}</b>", styles['Normal']))
+        story.append(Spacer(1, 0.2*inch))
+        
+        story.append(Paragraph(f"<b>Customer:</b> {patient_info['name']}", styles['Normal']))
+        story.append(Paragraph(f"<b>Contact:</b> {patient_info['contact']}", styles['Normal']))
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Medicines table
+        data = [['S.No', 'Medicine Name', 'Batch', 'Exp', 'Qty', 'MRP', 'Amount']]
+        
+        if medicines_list is None:
+            medicines_list = random.sample(MEDICINES, random.randint(2, 5))
+        
+        subtotal = 0
+        for i, med in enumerate(medicines_list, 1):
+            batch = f"{random.choice(['AB', 'CD', 'XY'])}{random.randint(100, 999)}"
+            exp_month = random.randint(1, 12)
+            exp_year = random.randint(25, 27)
+            exp_date = f"{exp_month:02d}/{exp_year}"
+            qty = random.randint(5, 30)
+            mrp = med['price']
+            amount = mrp * qty
+            subtotal += amount
+            
+            data.append([
+                str(i),
+                f"{med['name']} {med['strength']}",
+                batch,
+                exp_date,
+                str(qty),
+                f"₹{mrp}",
+                f"₹{amount}"
             ])
-            for p in params:
-                flag = "*" if p['status'] != "Normal" else " "
-                lines.append(f"{p['parameter']:<25} {p['value']:>10} {p['unit']:<12} {p['range']:<12} {p['status']:<8}{flag}")
         
-        lines.extend([
-            "",
-            "=" * 65,
-            "* Values outside normal range",
-            "",
-            f"Pathologist: {data['pathologist']}".rjust(55),
-            "[Digital Signature]".rjust(55),
-            "=" * 65
-        ])
-        return "\n".join(lines)
-
-
-class PharmacyBillGenerator:
-    @staticmethod
-    def generate() -> dict:
-        pharmacy = random.choice(PHARMACIES)
-        patient = random.choice(PATIENT_NAMES)
-        doctor = random.choice(DOCTORS)
-        date = random_date()
+        # Add totals
+        data.append(['', '', '', '', '', '', ''])
+        data.append(['', '', '', '', '', 'Sub Total:', f'₹{subtotal}'])
         
-        # Select medicines
-        num_items = random.randint(2, 6)
-        selected_meds = random.sample(MEDICINES, num_items)
+        discount = subtotal * random.choice([0, 0.05, 0.10])
+        if discount > 0:
+            data.append(['', '', '', '', '', 'Discount:', f'-₹{discount:.2f}'])
+            subtotal -= discount
         
-        items = []
-        for med in selected_meds:
-            qty = random.choice([10, 14, 15, 20, 30])
-            items.append({
-                "medicine": f"{med['form']}. {med['name']} {med['strength']}",
-                "batch": generate_batch_number(),
-                "expiry": generate_expiry_date(),
-                "qty": qty,
-                "mrp": med['price'],
-                "amount": round(med['price'] * qty, 2)
-            })
+        gst = subtotal * 0.12  # 12% GST for medicines
+        data.append(['', '', '', '', '', 'GST (12%):', f'₹{gst:.2f}'])
+        total = subtotal + gst
+        data.append(['', '', '', '', '', '<b>Net Amount:</b>', f'<b>₹{total:.2f}</b>'])
         
-        subtotal = sum(item['amount'] for item in items)
-        gst = round(subtotal * 0.12, 2)
-        discount = round(subtotal * random.choice([0, 0.05, 0.1, 0.15]), 2)
-        total = round(subtotal + gst - discount, 2)
+        # Create table
+        table = Table(data, colWidths=[0.5*inch, 2*inch, 0.7*inch, 0.7*inch, 0.5*inch, 0.8*inch, 1*inch])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#16a085')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('ALIGN', (1, 1), (1, -1), 'LEFT'),
+            ('ALIGN', (-1, 0), (-1, -1), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, -1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -len(data)+6), 1, colors.black),
+            ('LINEABOVE', (5, -5), (-1, -5), 1, colors.black),
+            ('LINEABOVE', (5, -1), (-1, -1), 2, colors.black),
+        ]))
+        
+        story.append(table)
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Payment details
+        payment_mode = random.choice(['Cash', 'Card', 'UPI', 'Digital Wallet'])
+        story.append(Paragraph(f"<b>Payment Mode:</b> {payment_mode}", styles['Normal']))
+        
+        story.append(Spacer(1, 0.2*inch))
+        story.append(Paragraph("<i>Thank you for your purchase!</i>", styles['Normal']))
+        story.append(Paragraph("<i>Keep medicines away from children</i>", styles['Normal']))
+        
+        doc.build(story)
+        
+        if add_noise:
+            self.add_noise_to_pdf(f'{self.output_dir}/{filename}')
+        
+        return f'{self.output_dir}/{filename}'
+    
+    def generate_complete_claimant_set(self, claimant_name=None, claimant_folder=None, add_noise=False):
+        """Generate all 4 documents for a single claimant"""
+        # Generate or use provided patient info
+        if claimant_name:
+            patient = self.generate_random_patient()
+            patient['name'] = claimant_name
+        else:
+            patient = self.generate_random_patient()
+        
+        # Create folder for this claimant
+        if claimant_folder is None:
+            claimant_folder = patient['name'].replace(' ', '_')
+        
+        claimant_path = f"{self.output_dir}/{claimant_folder}"
+        import os
+        os.makedirs(claimant_path, exist_ok=True)
+        
+        # Store original output_dir
+        original_output = self.output_dir
+        self.output_dir = claimant_path
+        
+        print(f"\n{'='*60}")
+        print(f"Generating documents for: {patient['name']}")
+        print(f"{'='*60}")
+        
+        # Select medicines and tests (to be consistent across documents)
+        selected_medicines = random.sample(MEDICINES, random.randint(3, 5))
+        selected_tests = random.sample(TESTS, random.randint(1, 3))
+        diagnosis = random.choice(DIAGNOSES)
+        
+        # 1. Generate Prescription
+        print("  [1/4] Generating Prescription...")
+        prescription_path = self.generate_prescription_for_claimant(
+            'prescription.pdf', 
+            patient, 
+            selected_medicines, 
+            selected_tests,
+            diagnosis,
+            add_noise
+        )
+        
+        # 2. Generate Lab Results
+        print("  [2/4] Generating Lab Results...")
+        lab_path = self.generate_diagnostic_report_for_claimant(
+            'lab_results.pdf',
+            patient,
+            selected_tests,
+            add_noise
+        )
+        
+        # 3. Generate Medical Bill
+        print("  [3/4] Generating Medical Bill...")
+        medical_bill_path = self.generate_medical_bill_for_claimant(
+            'medical_bill.pdf',
+            patient,
+            selected_tests,
+            add_noise
+        )
+        
+        # 4. Generate Pharmacy Bill
+        print("  [4/4] Generating Pharmacy Bill...")
+        pharmacy_bill_path = self.generate_pharmacy_bill(
+            'pharmacy_bill.pdf',
+            patient,
+            selected_medicines,
+            add_noise
+        )
+        
+        # Restore original output_dir
+        self.output_dir = original_output
+        
+        print(f"✓ Complete set generated in: {claimant_path}/")
         
         return {
-            "type": "pharmacy_bill",
-            "bill_no": f"PH{random.randint(10000, 99999)}",
-            "pharmacy": pharmacy,
-            "patient": patient,
-            "doctor": doctor['name'],
-            "date": date.strftime("%d/%m/%Y"),
-            "items": items,
-            "subtotal": subtotal,
-            "gst": gst,
-            "discount": discount,
-            "total": total,
-            "payment_mode": random.choice(["Cash", "Card", "UPI"]),
+            'claimant': patient['name'],
+            'folder': claimant_path,
+            'documents': {
+                'prescription': prescription_path,
+                'lab_results': lab_path,
+                'medical_bill': medical_bill_path,
+                'pharmacy_bill': pharmacy_bill_path
+            }
         }
     
-    @staticmethod
-    def to_text(data: dict) -> str:
-        lines = [
-            "=" * 75,
-            f"{data['pharmacy']['name']}".center(75),
-            f"Drug License: {data['pharmacy']['license']} | GST: {data['pharmacy']['gst']}".center(75),
-            "=" * 75,
-            f"Bill No: {data['bill_no']}".ljust(40) + f"Date: {data['date']}",
-            f"Patient: {data['patient']}".ljust(40) + f"Doctor: {data['doctor']}",
-            "-" * 75,
-            f"{'S.No':<5}{'Medicine':<30}{'Batch':<10}{'Exp':<8}{'Qty':<6}{'MRP':>8}{'Amount':>10}",
-            "-" * 75,
-        ]
+    def generate_prescription_for_claimant(self, filename, patient, medicines, tests, diagnosis, add_noise):
+        """Generate prescription with specific patient and medicines"""
+        doc = SimpleDocTemplate(f'{self.output_dir}/{filename}', pagesize=A4)
+        story = []
+        styles = getSampleStyleSheet()
         
-        for i, item in enumerate(data['items'], 1):
-            lines.append(
-                f"{i:<5}{item['medicine']:<30}{item['batch']:<10}{item['expiry']:<8}"
-                f"{item['qty']:<6}{item['mrp']:>8.2f}{item['amount']:>10.2f}"
+        header_style = ParagraphStyle(
+            'CustomHeader',
+            parent=styles['Heading1'],
+            fontSize=16,
+            textColor=colors.HexColor('#1a5490'),
+            spaceAfter=12,
+            alignment=TA_CENTER
+        )
+        
+        doctor = random.choice(DOCTORS)
+        reg_no = self.generate_registration_number()
+        
+        # Header
+        story.append(Paragraph(f"<b>{doctor['name']}</b>", header_style))
+        story.append(Paragraph(doctor['qualification'], styles['Normal']))
+        story.append(Paragraph(f"Reg. No: {reg_no}", styles['Normal']))
+        story.append(Paragraph(f"Specialty: {doctor['specialty']}", styles['Normal']))
+        story.append(Spacer(1, 0.3*inch))
+        
+        date = datetime.now() - timedelta(days=random.randint(0, 7))
+        story.append(Paragraph(f"Date: {date.strftime('%d/%m/%Y')}", styles['Normal']))
+        story.append(Spacer(1, 0.2*inch))
+        
+        # Patient Details
+        story.append(Paragraph(f"<b>Patient Name:</b> {patient['name']}", styles['Normal']))
+        story.append(Paragraph(f"<b>Age/Sex:</b> {patient['age']}/{patient['sex']}", styles['Normal']))
+        story.append(Paragraph(f"<b>Contact:</b> {patient['contact']}", styles['Normal']))
+        story.append(Spacer(1, 0.2*inch))
+        
+        # Diagnosis
+        story.append(Paragraph(f"<b>Diagnosis:</b> {diagnosis}", styles['Normal']))
+        story.append(Spacer(1, 0.2*inch))
+        
+        # Prescription
+        story.append(Paragraph("<b>Rx (Prescription):</b>", styles['Heading2']))
+        for i, med in enumerate(medicines, 1):
+            duration = random.choice(['5 days', '7 days', '10 days', '14 days'])
+            story.append(Paragraph(
+                f"{i}. {med['type']}. {med['name']} {med['strength']}<br/>"
+                f"   {med['dosage']} x {duration}",
+                styles['Normal']
+            ))
+        
+        story.append(Spacer(1, 0.2*inch))
+        
+        # Investigations
+        story.append(Paragraph("<b>Investigations Advised:</b>", styles['Heading2']))
+        for test in tests:
+            story.append(Paragraph(f"- {test['name']}", styles['Normal']))
+        
+        story.append(Spacer(1, 0.3*inch))
+        followup = date + timedelta(days=14)
+        story.append(Paragraph(f"<b>Follow-up:</b> {followup.strftime('%d/%m/%Y')}", styles['Normal']))
+        
+        story.append(Spacer(1, 0.5*inch))
+        story.append(Paragraph(f"<i>{doctor['name']}</i>", styles['Normal']))
+        
+        doc.build(story)
+        
+        if add_noise:
+            self.add_noise_to_pdf(f'{self.output_dir}/{filename}')
+        
+        return f'{self.output_dir}/{filename}'
+    
+    def generate_diagnostic_report_for_claimant(self, filename, patient, tests, add_noise):
+        """Generate diagnostic report for specific patient and tests"""
+        doc = SimpleDocTemplate(f'{self.output_dir}/{filename}', pagesize=A4)
+        story = []
+        styles = getSampleStyleSheet()
+        
+        story.append(Paragraph("<b>DIAGNOSTIC CENTER</b>", styles['Title']))
+        story.append(Paragraph("NABL Accredited Lab", styles['Normal']))
+        story.append(Spacer(1, 0.3*inch))
+        
+        date = datetime.now() - timedelta(days=random.randint(0, 5))
+        report_id = f"RPT{random.randint(100000, 999999)}"
+        
+        story.append(Paragraph(f"<b>Patient Name:</b> {patient['name']}", styles['Normal']))
+        story.append(Paragraph(f"<b>Age/Sex:</b> {patient['age']}/{patient['sex']}", styles['Normal']))
+        story.append(Paragraph(f"<b>Contact:</b> {patient['contact']}", styles['Normal']))
+        story.append(Paragraph(f"<b>Report ID:</b> {report_id}", styles['Normal']))
+        story.append(Paragraph(f"<b>Date:</b> {date.strftime('%d/%m/%Y')}", styles['Normal']))
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Generate results for each test
+        for test in tests:
+            story.append(Paragraph(f"<b>{test['name'].upper()}</b>", styles['Heading2']))
+            
+            if 'CBC' in test['name'] or 'Blood Count' in test['name']:
+                cbc_data = [
+                    ['Test Name', 'Result', 'Normal Range', 'Unit'],
+                    ['Hemoglobin', f'{random.uniform(12, 16):.1f}', '13-17', 'g/dL'],
+                    ['WBC Count', f'{random.randint(4000, 11000)}', '4000-11000', '/cumm'],
+                    ['RBC Count', f'{random.uniform(4.5, 5.5):.2f}', '4.5-5.5', 'million/cumm'],
+                    ['Platelets', f'{random.randint(150000, 450000)}', '150000-450000', '/cumm'],
+                ]
+            elif 'Lipid' in test['name']:
+                cbc_data = [
+                    ['Test Name', 'Result', 'Normal Range', 'Unit'],
+                    ['Total Cholesterol', f'{random.randint(150, 240)}', '<200', 'mg/dL'],
+                    ['HDL Cholesterol', f'{random.randint(40, 60)}', '>40', 'mg/dL'],
+                    ['LDL Cholesterol', f'{random.randint(70, 160)}', '<100', 'mg/dL'],
+                    ['Triglycerides', f'{random.randint(80, 180)}', '<150', 'mg/dL'],
+                ]
+            elif 'Sugar' in test['name'] or 'Blood Sugar' in test['name']:
+                cbc_data = [
+                    ['Test Name', 'Result', 'Normal Range', 'Unit'],
+                    ['Fasting Blood Sugar', f'{random.randint(80, 126)}', '70-100', 'mg/dL'],
+                ]
+            else:
+                cbc_data = [
+                    ['Test Name', 'Result', 'Status'],
+                    [test['name'], 'Normal', '✓ Within Range'],
+                ]
+            
+            table = Table(cbc_data)
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ]))
+            
+            story.append(table)
+            story.append(Spacer(1, 0.3*inch))
+        
+        story.append(Paragraph("<i>End of Report</i>", styles['Normal']))
+        
+        doc.build(story)
+        
+        if add_noise:
+            self.add_noise_to_pdf(f'{self.output_dir}/{filename}')
+        
+        return f'{self.output_dir}/{filename}'
+    
+    def generate_medical_bill_for_claimant(self, filename, patient, tests, add_noise):
+        """Generate medical bill for specific patient and tests"""
+        doc = SimpleDocTemplate(f'{self.output_dir}/{filename}', pagesize=A4)
+        story = []
+        styles = getSampleStyleSheet()
+        
+        header_style = ParagraphStyle(
+            'BillHeader',
+            parent=styles['Heading1'],
+            fontSize=18,
+            textColor=colors.HexColor('#2c3e50'),
+            alignment=TA_CENTER,
+            spaceAfter=20
+        )
+        
+        clinic_name = random.choice(['City Hospital', 'HealthCare Clinic', 'MediPlus Hospital'])
+        story.append(Paragraph(f"<b>{clinic_name}</b>", header_style))
+        story.append(Paragraph("Medical Bill/Invoice", styles['Heading2']))
+        story.append(Spacer(1, 0.2*inch))
+        
+        bill_no = random.randint(10000, 99999)
+        date = datetime.now() - timedelta(days=random.randint(0, 7))
+        
+        story.append(Paragraph(f"Bill No: <b>MB-{bill_no}</b>  |  Date: <b>{date.strftime('%d/%m/%Y')}</b>", styles['Normal']))
+        story.append(Spacer(1, 0.2*inch))
+        
+        story.append(Paragraph(f"<b>Patient Name:</b> {patient['name']}", styles['Normal']))
+        story.append(Paragraph(f"<b>Contact:</b> {patient['contact']}", styles['Normal']))
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Bill items table
+        data = [['S.No', 'Particulars', 'Amount (₹)']]
+        
+        consultation_fee = random.choice([500, 700, 1000, 1500])
+        data.append(['1', 'Consultation Fee', f'{consultation_fee:.2f}'])
+        
+        subtotal = consultation_fee
+        row_num = 2
+        
+        for test in tests:
+            data.append([str(row_num), test['name'], f'{test["price"]:.2f}'])
+            subtotal += test['price']
+            row_num += 1
+        
+        data.append(['', '', ''])
+        data.append(['', 'Sub Total:', f'{subtotal:.2f}'])
+        gst = subtotal * 0.18
+        data.append(['', 'GST (18%):', f'{gst:.2f}'])
+        total = subtotal + gst
+        data.append(['', '<b>TOTAL:</b>', f'<b>{total:.2f}</b>'])
+        
+        table = Table(data, colWidths=[0.8*inch, 4*inch, 1.5*inch])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('GRID', (0, 0), (-1, -4), 1, colors.black),
+            ('LINEABOVE', (1, -3), (-1, -3), 1, colors.black),
+            ('LINEABOVE', (1, -1), (-1, -1), 2, colors.black),
+            ('BACKGROUND', (0, -1), (-1, -1), colors.beige),
+        ]))
+        
+        story.append(table)
+        story.append(Spacer(1, 0.3*inch))
+        
+        payment_mode = random.choice(['Cash', 'Card', 'UPI'])
+        story.append(Paragraph(f"<b>Payment Mode:</b> {payment_mode}", styles['Normal']))
+        
+        doc.build(story)
+        
+        if add_noise:
+            self.add_noise_to_pdf(f'{self.output_dir}/{filename}')
+        
+        return f'{self.output_dir}/{filename}'
+    
+    def generate_batch_claimants(self, num_claimants=5, claimant_names=None, add_noise=False):
+        """Generate complete document sets for multiple claimants"""
+        results = []
+        
+        print(f"\n{'#'*60}")
+        print(f"  GENERATING DOCUMENTS FOR {num_claimants} CLAIMANTS")
+        print(f"{'#'*60}")
+        
+        for i in range(num_claimants):
+            if claimant_names and i < len(claimant_names):
+                claimant_name = claimant_names[i]
+            else:
+                claimant_name = None
+            
+            result = self.generate_complete_claimant_set(
+                claimant_name=claimant_name,
+                add_noise=add_noise
             )
+            results.append(result)
         
-        lines.extend([
-            "-" * 75,
-            f"{'Sub Total:':>60} ₹{data['subtotal']:>10.2f}",
-            f"{'GST (12%):':>60} ₹{data['gst']:>10.2f}",
-        ])
+        print(f"\n{'#'*60}")
+        print(f"  ✓ ALL DOCUMENTS GENERATED SUCCESSFULLY")
+        print(f"{'#'*60}\n")
         
-        if data['discount'] > 0:
-            lines.append(f"{'Discount:':>60} -₹{data['discount']:>9.2f}")
+        # Print summary
+        print("SUMMARY:")
+        for result in results:
+            print(f"\n  Claimant: {result['claimant']}")
+            print(f"  Folder: {result['folder']}")
+            print(f"    - Prescription: ✓")
+            print(f"    - Lab Results: ✓")
+            print(f"    - Medical Bill: ✓")
+            print(f"    - Pharmacy Bill: ✓")
         
-        lines.extend([
-            "=" * 75,
-            f"{'NET AMOUNT:':>60} ₹{data['total']:>10.2f}",
-            "=" * 75,
-            f"Payment: {data['payment_mode']}",
-            "",
-            "Thank you for your purchase!".center(75),
-            "=" * 75
-        ])
-        return "\n".join(lines)
+        return results
 
 
-# Main Generator Class
-class MedicalDocumentGenerator:
-    """Main class to generate various medical documents"""
-    
-    generators = {
-        "prescription": PrescriptionGenerator,
-        "medical_bill": MedicalBillGenerator,
-        "lab_report": LabReportGenerator,
-        "pharmacy_bill": PharmacyBillGenerator,
-    }
-    
-    @classmethod
-    def generate(cls, doc_type: Optional[str] = None, output_format: str = "both") -> dict:
-        """
-        Generate a medical document
-        
-        Args:
-            doc_type: Type of document (prescription, medical_bill, lab_report, pharmacy_bill)
-                     If None, generates random type
-            output_format: "data" for dict, "text" for formatted string, "both" for both
-        
-        Returns:
-            Dictionary with generated document
-        """
-        if doc_type is None:
-            doc_type = random.choice(list(cls.generators.keys()))
-        
-        if doc_type not in cls.generators:
-            raise ValueError(f"Unknown document type: {doc_type}. Valid types: {list(cls.generators.keys())}")
-        
-        generator = cls.generators[doc_type]
-        data = generator.generate()
-        
-        result = {"type": doc_type}
-        if output_format in ("data", "both"):
-            result["data"] = data
-        if output_format in ("text", "both"):
-            result["text"] = generator.to_text(data)
-        
-        return result
-    
-    @classmethod
-    def generate_batch(cls, count: int = 10, doc_types: Optional[list] = None) -> list:
-        """Generate multiple documents"""
-        if doc_types is None:
-            doc_types = list(cls.generators.keys())
-        
-        documents = []
-        for _ in range(count):
-            doc_type = random.choice(doc_types)
-            documents.append(cls.generate(doc_type))
-        return documents
-
-
-# Demo usage
+# Example usage
 if __name__ == "__main__":
-    print("=" * 80)
-    print("MEDICAL DOCUMENT GENERATOR - DEMO")
-    print("=" * 80)
+    generator = MedicalDocumentGenerator(output_dir='medical_docs')
     
-    # Generate one of each type
-    for doc_type in ["prescription", "medical_bill", "lab_report", "pharmacy_bill"]:
-        print(f"\n{'#' * 80}")
-        print(f"# {doc_type.upper().replace('_', ' ')}")
-        print(f"{'#' * 80}\n")
-        
-        doc = MedicalDocumentGenerator.generate(doc_type, output_format="text")
-        print(doc["text"])
+    # ============================================================
+    # OPTION 1: Generate complete sets for multiple claimants
+    # ============================================================
     
-    # Generate batch and save as JSON
-    print("\n" + "=" * 80)
-    print("Generating batch of 5 random documents...")
-    batch = MedicalDocumentGenerator.generate_batch(5)
-    print(f"Generated {len(batch)} documents: {[d['type'] for d in batch]}")
+    # Generate for 5 claimants with random names
+    generator.generate_batch_claimants(num_claimants=5, add_noise=False)
     
-    # Save to JSON (data only)
-    with open("sample_documents.json", "w") as f:
-        json.dump([MedicalDocumentGenerator.generate(output_format="data") for _ in range(10)], f, indent=2)
-    print("Saved 10 documents to sample_documents.json")
+    # OR generate with specific claimant names
+    # claimant_names = ['Rajesh Kumar', 'Priya Sharma', 'Amit Patel', 'Sunita Reddy']
+    # generator.generate_batch_claimants(num_claimants=4, claimant_names=claimant_names, add_noise=False)
+    
+    # ============================================================
+    # OPTION 2: Generate complete set for a single claimant
+    # ============================================================
+    # result = generator.generate_complete_claimant_set(claimant_name='Vikram Singh', add_noise=False)
+    # print(f"\nDocuments generated in: {result['folder']}")
+    
+    # ============================================================
+    # OPTION 3: Generate individual documents (old method)
+    # ============================================================
+    # generator.generate_prescription('sample_prescription.pdf')
+    # generator.generate_medical_bill('sample_bill.pdf')
+    # generator.generate_diagnostic_report('sample_report.pdf')
+    # generator.generate_pharmacy_bill('sample_pharmacy.pdf')
+    
+    print("\n✓ Document generation complete! Check the 'medical_docs' folder.")
