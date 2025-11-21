@@ -7,6 +7,10 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 import os
 import re
+# Render injects proxy variables that break httpx + OpenAI SDK
+for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
+    os.environ.pop(key, None)
+
 from openai import AzureOpenAI
 from PIL import Image
 import pytesseract
