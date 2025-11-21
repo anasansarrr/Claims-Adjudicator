@@ -9,8 +9,6 @@ gunicorn
 
 # AI/ML & OCR
 openai==1.3.0
-paddlepaddle==2.6.2
-paddleocr==2.7.0
 pytesseract==0.3.10
 
 # Document Processing

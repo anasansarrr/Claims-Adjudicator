@@ -16,7 +16,6 @@ import fitz
 import uuid
 from db_manager import DatabaseManager
 
-# Initialize OCR once (English only)
 
 class ClaimProcessor:
     """
