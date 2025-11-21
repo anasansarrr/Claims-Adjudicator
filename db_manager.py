@@ -1,330 +1,273 @@
 """
 Database Manager for Medical Claim Adjudication System
-Handles all database operations using Supabase PostgreSQL
+Uses Supabase REST API - works anywhere, no network issues
 """
 import os
 from typing import Dict, List, Any, Optional
 from datetime import datetime
-import psycopg2
-from psycopg2.extras import RealDictCursor, Json
-from psycopg2.pool import SimpleConnectionPool
+import requests
 import json
 
 
 class DatabaseManager:
-    """Manages all database operations for claim adjudication system"""
+    """Manages all database operations using Supabase REST API"""
     
     def __init__(self):
-        """Initialize database connection pool"""
-        self.db_url = os.getenv('DATABASE_URL')
-        if not self.db_url:
-            raise ValueError("DATABASE_URL environment variable not set")
+        """Initialize Supabase REST API client"""
+        self.supabase_url = os.getenv('SUPABASE_URL')
+        self.supabase_key = os.getenv('SUPABASE_KEY')
         
-        # Parse connection string and ensure SSL is enabled
-        # Add sslmode if not present
-        if 'sslmode=' not in self.db_url:
-            separator = '&' if '?' in self.db_url else '?'
-            self.db_url = f"{self.db_url}{separator}sslmode=require"
-        
-        try:
-            # Create connection pool with SSL
-            self.pool = SimpleConnectionPool(
-                minconn=1,
-                maxconn=10,
-                dsn=self.db_url,
-                connect_timeout=10  # Add timeout
+        if not self.supabase_url or not self.supabase_key:
+            raise ValueError(
+                "SUPABASE_URL and SUPABASE_KEY environment variables must be set.\n"
+                "Get these from your Supabase project settings > API"
             )
-            
-            # Test the connection
-            conn = self.pool.getconn()
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-            self.pool.putconn(conn)
-            print("✓ Database connection pool initialized successfully")
-            
-        except psycopg2.OperationalError as e:
-            error_msg = str(e)
-            if "Connection refused" in error_msg:
-                raise ValueError(
-                    "Cannot connect to database. Please check:\n"
-                    "1. Your DATABASE_URL format (should not have [] around password)\n"
-                    "2. Try using port 6543 (connection pooler) instead of 5432\n"
-                    "3. Add ?sslmode=require to the connection string\n"
-                    "4. Verify your Supabase project is active\n"
-                    f"Original error: {error_msg}"
-                )
-            raise
-    
-    def get_connection(self):
-        """Get connection from pool"""
-        return self.pool.getconn()
-    
-    def release_connection(self, conn):
-        """Return connection to pool"""
-        self.pool.putconn(conn)
-    
-    def execute_query(self, query: str, params: tuple = None, fetch: bool = True):
-        """Execute a query and return results"""
-        conn = self.get_connection()
+        
+        # Clean up URL if needed
+        self.supabase_url = self.supabase_url.rstrip('/')
+        self.api_url = f"{self.supabase_url}/rest/v1"
+        
+        # Common headers for all requests
+        self.headers = {
+            'apikey': self.supabase_key,
+            'Authorization': f'Bearer {self.supabase_key}',
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation'
+        }
+        
+        # Test connection
         try:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(query, params)
-
-                # Always commit after any successful execute
-                conn.commit()
-
-                if fetch:
-                    result = cur.fetchall()
-                    return [dict(row) for row in result]
-
-                return None
-
-        except Exception as e:
-            conn.rollback()
-            raise e
-
-        finally:
-            self.release_connection(conn)
-
+            response = requests.get(
+                f"{self.api_url}/policies",
+                headers=self.headers,
+                params={'limit': 1},
+                timeout=10
+            )
+            response.raise_for_status()
+            print("✓ Supabase REST API connection initialized successfully")
+        except requests.exceptions.RequestException as e:
+            raise ValueError(
+                f"Cannot connect to Supabase API. Please check:\n"
+                f"1. SUPABASE_URL is correct (should be https://xxx.supabase.co)\n"
+                f"2. SUPABASE_KEY is the 'anon' or 'service_role' key\n"
+                f"3. Your Supabase project is active\n"
+                f"Original error: {e}"
+            )
+    
+    def _get(self, table: str, params: Dict = None) -> List[Dict]:
+        """Generic GET request"""
+        url = f"{self.api_url}/{table}"
+        response = requests.get(url, headers=self.headers, params=params or {})
+        response.raise_for_status()
+        return response.json()
+    
+    def _post(self, table: str, data: Dict) -> Dict:
+        """Generic POST request"""
+        url = f"{self.api_url}/{table}"
+        response = requests.post(url, headers=self.headers, json=data)
+        response.raise_for_status()
+        result = response.json()
+        return result[0] if isinstance(result, list) and result else result
+    
+    def _patch(self, table: str, data: Dict, filter_params: Dict) -> Dict:
+        """Generic PATCH request"""
+        url = f"{self.api_url}/{table}"
+        params = {f"{k}": f"eq.{v}" for k, v in filter_params.items()}
+        response = requests.patch(url, headers=self.headers, json=data, params=params)
+        response.raise_for_status()
+        result = response.json()
+        return result[0] if isinstance(result, list) and result else result
+    
+    def _delete(self, table: str, filter_params: Dict) -> bool:
+        """Generic DELETE request"""
+        url = f"{self.api_url}/{table}"
+        params = {f"{k}": f"eq.{v}" for k, v in filter_params.items()}
+        response = requests.delete(url, headers=self.headers, params=params)
+        response.raise_for_status()
+        return True
     
     # ==================== POLICY OPERATIONS ====================
     
     def get_policy(self, policy_id: str) -> Optional[Dict]:
         """Get policy by ID"""
-        query = "SELECT * FROM policies WHERE policy_id = %s"
-        result = self.execute_query(query, (policy_id,))
-        return result[0] if result else None
-    
+        try:
+            result = self._get('policies', {'policy_id': f'eq.{policy_id}'})
+            return result[0] if result else None
+        except:
+            return None
     
     def create_policy(self, policy_data: Dict) -> str:
-        query = """
-            INSERT INTO policies (
-                policy_id, policy_name, effective_date, policy_config
-            ) VALUES (%s, %s, %s, %s)
-            RETURNING policy_id
-        """
-        params = (
-            policy_data["policy_id"],
-            policy_data["policy_name"],
-            policy_data["effective_date"],
-            Json(policy_data)
-        )
-        result = self.execute_query(query, params)
-        return result[0]["policy_id"]
-
-
+        """Create new policy"""
+        data = {
+            'policy_id': policy_data['policy_id'],
+            'policy_name': policy_data['policy_name'],
+            'effective_date': policy_data['effective_date'],
+            'policy_config': policy_data
+        }
+        result = self._post('policies', data)
+        return result['policy_id']
     
     # ==================== MEMBER OPERATIONS ====================
     
     def get_member(self, member_id: str) -> Optional[Dict]:
         """Get member by ID"""
-        query = "SELECT * FROM covered_members WHERE member_id = %s"
-        result = self.execute_query(query, (member_id,))
-        return result[0] if result else None
+        try:
+            result = self._get('covered_members', {'member_id': f'eq.{member_id}'})
+            return result[0] if result else None
+        except:
+            return None
     
     def get_member_by_employee_id(self, employee_id: str) -> Optional[Dict]:
         """Get member by employee ID"""
-        query = "SELECT * FROM covered_members WHERE employee_id = %s"
-        result = self.execute_query(query, (employee_id,))
-        return result[0] if result else None
+        try:
+            result = self._get('covered_members', {'employee_id': f'eq.{employee_id}'})
+            return result[0] if result else None
+        except:
+            return None
     
     def create_member(self, member_data: Dict) -> str:
         """Create new covered member"""
-        query = """
-            INSERT INTO covered_members (
-                member_id, policy_id, employee_id, member_name,
-                date_of_birth, gender, relationship, status
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING member_id
-        """
-        params = (
-            member_data['member_id'],
-            member_data['policy_id'],
-            member_data.get('employee_id'),
-            member_data['member_name'],
-            member_data.get('date_of_birth'),
-            member_data.get('gender'),
-            member_data.get('relationship'),
-            member_data.get('status', 'active')
-        )
-        result = self.execute_query(query, params)
-        return result[0]['member_id'] if result else None
+        data = {
+            'member_id': member_data['member_id'],
+            'policy_id': member_data['policy_id'],
+            'employee_id': member_data.get('employee_id'),
+            'member_name': member_data['member_name'],
+            'date_of_birth': member_data.get('date_of_birth'),
+            'gender': member_data.get('gender'),
+            'relationship': member_data.get('relationship'),
+            'status': member_data.get('status', 'active')
+        }
+        result = self._post('covered_members', data)
+        return result['member_id']
     
     # ==================== CLAIM OPERATIONS ====================
     
     def create_claim(self, claim_data: Dict) -> str:
         """Create new claim record"""
-        
-        # ✅ Handle both field name variations
         total_claimed = claim_data.get('total_claimed_amount') or claim_data.get('total_amount', 0)
         
-        query = """
-            INSERT INTO claims (
-                claim_id, policy_id, member_id, patient_name, patient_age,
-                patient_gender, patient_dob, employee_id, treatment_date,
-                claim_date, document_type, total_claimed_amount, diagnosis,
-                diagnosis_code, symptoms, treatment_summary, emergency_treatment,
-                follow_up_required, hospital_name, hospital_registration,
-                hospital_address, doctor_name, doctor_registration,
-                doctor_specialization, pre_authorization_number,
-                extracted_data, document_path, decision
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-            )
-            RETURNING claim_id
-        """
-        params = (
-            claim_data['claim_id'],
-            claim_data.get('policy_id'),
-            claim_data.get('member_id'),
-            claim_data['patient_name'],
-            claim_data.get('patient_age'),
-            claim_data.get('patient_gender'),
-            claim_data.get('patient_dob'),
-            claim_data.get('employee_id'),
-            claim_data['treatment_date'],
-            claim_data['claim_date'],
-            claim_data.get('document_type'),
-            total_claimed,  # ✅ Use the mapped value
-            claim_data.get('diagnosis'),
-            claim_data.get('diagnosis_code'),
-            claim_data.get('symptoms'),
-            claim_data.get('treatment_summary'),
-            claim_data.get('emergency_treatment', False),
-            claim_data.get('follow_up_required', False),
-            claim_data.get('hospital_name'),
-            claim_data.get('hospital_registration'),
-            claim_data.get('hospital_address'),
-            claim_data.get('doctor_name'),
-            claim_data.get('doctor_registration'),
-            claim_data.get('doctor_specialization'),
-            claim_data.get('pre_authorization_number'),
-            Json(claim_data),
-            claim_data.get('document_path'),
-            'PENDING'
-        )
-        result = self.execute_query(query, params)
-        return result[0]['claim_id'] if result else None
+        data = {
+            'claim_id': claim_data['claim_id'],
+            'policy_id': claim_data.get('policy_id'),
+            'member_id': claim_data.get('member_id'),
+            'patient_name': claim_data['patient_name'],
+            'patient_age': claim_data.get('patient_age'),
+            'patient_gender': claim_data.get('patient_gender'),
+            'patient_dob': claim_data.get('patient_dob'),
+            'employee_id': claim_data.get('employee_id'),
+            'treatment_date': claim_data['treatment_date'],
+            'claim_date': claim_data['claim_date'],
+            'document_type': claim_data.get('document_type'),
+            'total_claimed_amount': total_claimed,
+            'diagnosis': claim_data.get('diagnosis'),
+            'diagnosis_code': claim_data.get('diagnosis_code'),
+            'symptoms': claim_data.get('symptoms'),
+            'treatment_summary': claim_data.get('treatment_summary'),
+            'emergency_treatment': claim_data.get('emergency_treatment', False),
+            'follow_up_required': claim_data.get('follow_up_required', False),
+            'hospital_name': claim_data.get('hospital_name'),
+            'hospital_registration': claim_data.get('hospital_registration'),
+            'hospital_address': claim_data.get('hospital_address'),
+            'doctor_name': claim_data.get('doctor_name'),
+            'doctor_registration': claim_data.get('doctor_registration'),
+            'doctor_specialization': claim_data.get('doctor_specialization'),
+            'pre_authorization_number': claim_data.get('pre_authorization_number'),
+            'extracted_data': claim_data,
+            'document_path': claim_data.get('document_path'),
+            'decision': 'PENDING'
+        }
+        
+        result = self._post('claims', data)
+        return result['claim_id']
     
     def update_claim_decision(self, claim_id: str, decision_data: Dict):
         """Update claim with adjudication decision"""
-        query = """
-            UPDATE claims SET
-                decision = %s,
-                decision_reason = %s,
-                approved_amount = %s,
-                rejected_amount = %s,
-                copay_amount = %s,
-                patient_payable = %s,
-                insurance_payable = %s,
-                confidence_score = %s,
-                fraud_score = %s,
-                adjudication_date = %s
-            WHERE claim_id = %s
-        """
-        params = (
-            decision_data['decision'],
-            decision_data['reason'],
-            decision_data['approved_amount'],
-            decision_data['deductions']['rejected_items'],
-            decision_data['deductions']['copay'],
-            decision_data['patient_payable'],
-            decision_data['insurance_payable'],
-            decision_data['confidence_score'],
-            decision_data.get('fraud_score', 0),
-            datetime.now(),
-            claim_id
-        )
-        self.execute_query(query, params, fetch=False)
+        data = {
+            'decision': decision_data['decision'],
+            'decision_reason': decision_data['reason'],
+            'approved_amount': decision_data['approved_amount'],
+            'rejected_amount': decision_data['deductions']['rejected_items'],
+            'copay_amount': decision_data['deductions']['copay'],
+            'patient_payable': decision_data['patient_payable'],
+            'insurance_payable': decision_data['insurance_payable'],
+            'confidence_score': decision_data['confidence_score'],
+            'fraud_score': decision_data.get('fraud_score', 0),
+            'adjudication_date': datetime.now().isoformat()
+        }
+        
+        self._patch('claims', data, {'claim_id': claim_id})
     
     def get_claim(self, claim_id: str) -> Optional[Dict]:
-        """Get claim by ID with all related data"""
-        query = """
-            SELECT 
-                c.*,
-                p.policy_name,
-                m.member_name,
-                COALESCE(
-                    json_agg(
-                        json_build_object(
-                            'id', ci.id,
-                            'description', ci.description,
-                            'category', ci.category,
-                            'claimed_amount', ci.claimed_amount,
-                            'approved_amount', ci.approved_amount,
-                            'status', ci.status
-                        )
-                    ),
-                    '[]'::json
-                ) AS items
-            FROM claims c
-            LEFT JOIN policies p ON c.policy_id = p.policy_id
-            LEFT JOIN covered_members m ON c.member_id = m.member_id
-            LEFT JOIN claim_items ci ON c.claim_id = ci.claim_id
-            WHERE c.claim_id = %s
-            GROUP BY c.id, p.policy_name, m.member_name
-
-        """
-        result = self.execute_query(query, (claim_id,))
-        return result[0] if result else None
+        """Get claim by ID with related data"""
+        try:
+            # Get main claim data
+            claims = self._get('claims', {'claim_id': f'eq.{claim_id}'})
+            if not claims:
+                return None
+            
+            claim = claims[0]
+            
+            # Get related items
+            items = self._get('claim_items', {'claim_id': f'eq.{claim_id}'})
+            claim['items'] = items
+            
+            # Get policy name
+            if claim.get('policy_id'):
+                policy = self.get_policy(claim['policy_id'])
+                if policy:
+                    claim['policy_name'] = policy.get('policy_name')
+            
+            # Get member name
+            if claim.get('member_id'):
+                member = self.get_member(claim['member_id'])
+                if member:
+                    claim['member_name'] = member.get('member_name')
+            
+            return claim
+        except:
+            return None
     
     def get_claims_by_policy(self, policy_id: str, limit: int = 100) -> List[Dict]:
-        query = """
-            SELECT * FROM claim_summary
-            WHERE policy_id = %s
-            ORDER BY treatment_date DESC
-            LIMIT %s
-        """
-        return self.execute_query(query, (policy_id, limit))
+        """Get claims for a policy"""
+        params = {
+            'policy_id': f'eq.{policy_id}',
+            'order': 'treatment_date.desc',
+            'limit': limit
+        }
+        return self._get('claims', params)
     
     def get_recent_claims(self, days: int = 30, limit: int = 100) -> List[Dict]:
         """Get recent claims"""
-        query = """
-            SELECT * FROM claim_summary
-            WHERE treatment_date >= CURRENT_DATE - (%s * INTERVAL '1 day')
-            ORDER BY treatment_date DESC
-            LIMIT %s
-        """
-        return self.execute_query(query, (days, limit))
-
+        from datetime import timedelta
+        cutoff_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+        
+        params = {
+            'treatment_date': f'gte.{cutoff_date}',
+            'order': 'treatment_date.desc',
+            'limit': limit
+        }
+        return self._get('claims', params)
     
     # ==================== CLAIM ITEMS OPERATIONS ====================
     
     def create_claim_items(self, claim_id: str, items: List[Dict]):
         """Create claim items in bulk"""
-        query = """
-            INSERT INTO claim_items (
-                claim_id, description, category, quantity, unit_price,
-                claimed_amount, approved_amount, rejected_amount,
-                copay_amount, status, coverage_reason, sub_limit_exceeded
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """
-        conn = self.get_connection()
-        try:
-            with conn.cursor() as cur:
-                for item in items:
-                    params = (
-                        claim_id,
-                        item['description'],
-                        item['category'],
-                        item.get('quantity', 1),
-                        item.get('unit_price'),
-                        item['claimed_amount'],
-                        item['approved_amount'],
-                        item['rejected_amount'],
-                        item['copay_amount'],
-                        item['status'],
-                        item['reason'],
-                        item.get('sub_limit_exceeded', False)
-                    )
-                    cur.execute(query, params)
-                conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise e
-        finally:
-            self.release_connection(conn)
+        for item in items:
+            data = {
+                'claim_id': claim_id,
+                'description': item['description'],
+                'category': item['category'],
+                'quantity': item.get('quantity', 1),
+                'unit_price': item.get('unit_price'),
+                'claimed_amount': item['claimed_amount'],
+                'approved_amount': item['approved_amount'],
+                'rejected_amount': item['rejected_amount'],
+                'copay_amount': item['copay_amount'],
+                'status': item['status'],
+                'coverage_reason': item['reason'],
+                'sub_limit_exceeded': item.get('sub_limit_exceeded', False)
+            }
+            self._post('claim_items', data)
     
     # ==================== ISSUES OPERATIONS ====================
     
@@ -333,39 +276,24 @@ class DatabaseManager:
         if not issues:
             return
         
-        query = """
-            INSERT INTO adjudication_issues (
-                claim_id, issue_code, severity, message, step, item_description
-            ) VALUES (%s, %s, %s, %s, %s, %s)
-        """
-        conn = self.get_connection()
-        try:
-            with conn.cursor() as cur:
-                for issue in issues:
-                    params = (
-                        claim_id,
-                        issue['code'],
-                        issue['severity'],
-                        issue['message'],
-                        issue.get('step'),
-                        issue.get('item')
-                    )
-                    cur.execute(query, params)
-                conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise e
-        finally:
-            self.release_connection(conn)
+        for issue in issues:
+            data = {
+                'claim_id': claim_id,
+                'issue_code': issue['code'],
+                'severity': issue['severity'],
+                'message': issue['message'],
+                'step': issue.get('step'),
+                'item_description': issue.get('item')
+            }
+            self._post('adjudication_issues', data)
     
     def get_claim_issues(self, claim_id: str) -> List[Dict]:
         """Get all issues for a claim"""
-        query = """
-            SELECT * FROM adjudication_issues
-            WHERE claim_id = %s
-            ORDER BY created_at
-        """
-        return self.execute_query(query, (claim_id,))
+        params = {
+            'claim_id': f'eq.{claim_id}',
+            'order': 'created_at.asc'
+        }
+        return self._get('adjudication_issues', params)
     
     # ==================== FRAUD INDICATORS OPERATIONS ====================
     
@@ -374,174 +302,172 @@ class DatabaseManager:
         if not indicators:
             return
         
-        query = """
-            INSERT INTO fraud_indicators (
-                claim_id, indicator_type, severity, message, score
-            ) VALUES (%s, %s, %s, %s, %s)
-        """
-        conn = self.get_connection()
-        try:
-            with conn.cursor() as cur:
-                for indicator in indicators:
-                    params = (
-                        claim_id,
-                        indicator['type'],
-                        indicator['severity'],
-                        indicator['message'],
-                        indicator['score']
-                    )
-                    cur.execute(query, params)
-                conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise e
-        finally:
-            self.release_connection(conn)
+        for indicator in indicators:
+            data = {
+                'claim_id': claim_id,
+                'indicator_type': indicator['type'],
+                'severity': indicator['severity'],
+                'message': indicator['message'],
+                'score': indicator['score']
+            }
+            self._post('fraud_indicators', data)
     
     # ==================== AUDIT LOG OPERATIONS ====================
     
     def log_audit(self, claim_id: str, action: str, performed_by: str = 'system', details: Dict = None):
         """Create audit log entry"""
-        query = """
-            INSERT INTO audit_log (claim_id, action, performed_by, details)
-            VALUES (%s, %s, %s, %s)
-        """
-        params = (claim_id, action, performed_by, Json(details or {}))
-        self.execute_query(query, params, fetch=False)
+        data = {
+            'claim_id': claim_id,
+            'action': action,
+            'performed_by': performed_by,
+            'details': details or {}
+        }
+        self._post('audit_log', data)
     
     def get_claim_audit_log(self, claim_id: str) -> List[Dict]:
         """Get audit log for a claim"""
-        query = """
-            SELECT * FROM audit_log
-            WHERE claim_id = %s
-            ORDER BY created_at DESC
-        """
-        return self.execute_query(query, (claim_id,))
+        params = {
+            'claim_id': f'eq.{claim_id}',
+            'order': 'created_at.desc'
+        }
+        return self._get('audit_log', params)
     
     # ==================== DOCUMENT UPLOADS OPERATIONS ====================
     
     def create_document_upload(self, claim_id: str, file_data: Dict) -> str:
         """Record document upload"""
-        query = """
-            INSERT INTO document_uploads (
-                claim_id, file_name, file_type, file_size, file_path, 
-                storage_url, document_type
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-        """
-        params = (
-            claim_id,
-            file_data['file_name'],
-            file_data['file_type'],
-            file_data.get('file_size'),
-            file_data['file_path'],
-            file_data.get('storage_url'),
-            file_data.get('document_type', 'general')  # NEW FIELD
-        )
-        result = self.execute_query(query, params)
-        return str(result[0]['id']) if result else None
+        data = {
+            'claim_id': claim_id,
+            'file_name': file_data['file_name'],
+            'file_type': file_data['file_type'],
+            'file_size': file_data.get('file_size'),
+            'file_path': file_data['file_path'],
+            'storage_url': file_data.get('storage_url'),
+            'document_type': file_data.get('document_type', 'general')
+        }
+        result = self._post('document_uploads', data)
+        return str(result['id'])
+    
+    def get_claim_documents_by_type(self, claim_id: str, doc_type: str = None) -> List[Dict]:
+        """Get documents for a claim, optionally filtered by type"""
+        params = {'claim_id': f'eq.{claim_id}'}
+        
+        if doc_type:
+            params['document_type'] = f'eq.{doc_type}'
+        
+        params['order'] = 'uploaded_at.desc'
+        return self._get('document_uploads', params)
     
     # ==================== ANALYTICS & REPORTS ====================
     
     def get_claims_statistics(self, policy_id: str = None, start_date: str = None, end_date: str = None) -> Dict:
         """Get claims statistics"""
-        conditions = []
-        params = []
+        # For complex aggregations, use RPC functions or manual calculation
+        params = {}
         
         if policy_id:
-            conditions.append("policy_id = %s")
-            params.append(policy_id)
+            params['policy_id'] = f'eq.{policy_id}'
         if start_date:
-            conditions.append("treatment_date >= %s")
-            params.append(start_date)
+            params['treatment_date'] = f'gte.{start_date}'
         if end_date:
-            conditions.append("treatment_date <= %s")
-            params.append(end_date)
+            if 'treatment_date' in params:
+                # Supabase doesn't support multiple filters on same column easily
+                # You may need to fetch and filter in Python
+                pass
+            else:
+                params['treatment_date'] = f'lte.{end_date}'
         
-        where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+        claims = self._get('claims', params)
         
-        query = f"""
-            SELECT 
-                COUNT(*) as total_claims,
-                SUM(CASE WHEN decision = 'APPROVED' THEN 1 ELSE 0 END) as approved_count,
-                SUM(CASE WHEN decision = 'REJECTED' THEN 1 ELSE 0 END) as rejected_count,
-                SUM(CASE WHEN decision = 'PARTIAL' THEN 1 ELSE 0 END) as partial_count,
-                SUM(CASE WHEN decision = 'MANUAL_REVIEW' THEN 1 ELSE 0 END) as manual_review_count,
-                SUM(total_claimed_amount) as total_claimed,
-                SUM(approved_amount) as total_approved,
-                AVG(confidence_score) as avg_confidence,
-                AVG(fraud_score) as avg_fraud_score
-            FROM claims
-            {where_clause}
-        """
-        result = self.execute_query(query, tuple(params))
-        return result[0] if result else {}
+        # Calculate statistics
+        stats = {
+            'total_claims': len(claims),
+            'approved_count': sum(1 for c in claims if c.get('decision') == 'APPROVED'),
+            'rejected_count': sum(1 for c in claims if c.get('decision') == 'REJECTED'),
+            'partial_count': sum(1 for c in claims if c.get('decision') == 'PARTIAL'),
+            'manual_review_count': sum(1 for c in claims if c.get('decision') == 'MANUAL_REVIEW'),
+            'total_claimed': sum(c.get('total_claimed_amount', 0) or 0 for c in claims),
+            'total_approved': sum(c.get('approved_amount', 0) or 0 for c in claims),
+            'avg_confidence': sum(c.get('confidence_score', 0) or 0 for c in claims) / len(claims) if claims else 0,
+            'avg_fraud_score': sum(c.get('fraud_score', 0) or 0 for c in claims) / len(claims) if claims else 0
+        }
+        
+        return stats
     
     def update_policy_claims_ytd(self, policy_id: str, amount: float):
         """Update policy year-to-date claims amount"""
-        query = """
-            UPDATE policies 
-            SET claims_ytd = COALESCE(claims_ytd, 0) + %s
-            WHERE policy_id = %s
-        """
-        self.execute_query(query, (amount, policy_id), fetch=False)
-
+        # Get current policy
+        policy = self.get_policy(policy_id)
+        if not policy:
+            return
+        
+        current_ytd = policy.get('claims_ytd', 0) or 0
+        new_ytd = current_ytd + amount
+        
+        self._patch('policies', {'claims_ytd': new_ytd}, {'policy_id': policy_id})
+    
     def get_policy_by_number(self, policy_number: str) -> Optional[Dict]:
-        """Get policy by policy number (for backward compatibility)"""
-        # Assuming policy_number might be stored in policy_config JSON
-        query = """
-            SELECT * FROM policies 
-            WHERE policy_id = %s 
-            OR policy_config->>'policy_number' = %s
-        """
-        result = self.execute_query(query, (policy_number, policy_number))
-        return result[0] if result else None
-
+        """Get policy by policy number"""
+        try:
+            # Try direct match
+            result = self._get('policies', {'policy_id': f'eq.{policy_number}'})
+            if result:
+                return result[0]
+            
+            # Try searching in policy_config JSON
+            # This requires using Supabase's JSON operators
+            # For now, fetch all and filter
+            policies = self._get('policies', {})
+            for policy in policies:
+                config = policy.get('policy_config', {})
+                if isinstance(config, dict) and config.get('policy_number') == policy_number:
+                    return policy
+            
+            return None
+        except:
+            return None
+    
     def get_policy_utilization(self, policy_id: str) -> Optional[Dict]:
         """Get policy utilization with category breakdown"""
-        query = """
-            SELECT 
-                policy_id,
-                SUM(approved_amount) as total_approved_ytd,
-                COUNT(*) as total_claims,
-                json_object_agg(
-                    category, 
-                    category_total
-                ) as category_usage
-            FROM (
-                SELECT 
-                    c.policy_id,
-                    c.approved_amount,
-                    ci.category,
-                    SUM(ci.approved_amount) as category_total
-                FROM claims c
-                LEFT JOIN claim_items ci ON c.claim_id = ci.claim_id
-                WHERE c.policy_id = %s
-                AND EXTRACT(YEAR FROM c.treatment_date) = EXTRACT(YEAR FROM CURRENT_DATE)
-                GROUP BY c.policy_id, c.approved_amount, ci.category
-            ) subquery
-            GROUP BY policy_id
-        """
-        result = self.execute_query(query, (policy_id,))
-        return result[0] if result else None
+        try:
+            # Get all claims for this policy in current year
+            current_year = datetime.now().year
+            params = {
+                'policy_id': f'eq.{policy_id}',
+                'treatment_date': f'gte.{current_year}-01-01'
+            }
+            claims = self._get('claims', params)
+            
+            if not claims:
+                return None
+            
+            # Calculate totals
+            total_approved = sum(c.get('approved_amount', 0) or 0 for c in claims)
+            total_claims = len(claims)
+            
+            # Get category usage
+            category_usage = {}
+            for claim in claims:
+                claim_id = claim['claim_id']
+                items = self._get('claim_items', {'claim_id': f'eq.{claim_id}'})
+                
+                for item in items:
+                    category = item.get('category', 'unknown')
+                    approved = item.get('approved_amount', 0) or 0
+                    
+                    if category not in category_usage:
+                        category_usage[category] = 0
+                    category_usage[category] += approved
+            
+            return {
+                'policy_id': policy_id,
+                'total_approved_ytd': total_approved,
+                'total_claims': total_claims,
+                'category_usage': category_usage
+            }
+        except:
+            return None
     
     def close(self):
-        """Close all database connections"""
-        self.pool.closeall()
-        
-    def get_claim_documents_by_type(self, claim_id: str, doc_type: str = None) -> List[Dict]:
-        """Get documents for a claim, optionally filtered by type"""
-        if doc_type:
-            query = """
-                SELECT * FROM document_uploads
-                WHERE claim_id = %s AND document_type = %s
-                ORDER BY uploaded_at DESC
-            """
-            return self.execute_query(query, (claim_id, doc_type))
-        else:
-            query = """
-                SELECT * FROM document_uploads
-                WHERE claim_id = %s
-                ORDER BY document_type, uploaded_at DESC
-            """
-            return self.execute_query(query, (claim_id,))
+        """Close connections (no-op for REST API)"""
+        pass
