@@ -31,14 +31,3 @@ def create_app():
     app.register_blueprint(api_blueprint, url_prefix='/api')
     
     return app
-
-if __name__ == '__main__':
-    app = create_app()
-    port = int(os.getenv('PORT', 5000))
-    debug = os.getenv('FLASK_ENV') == 'development'
-    
-    app.run(
-        host='0.0.0.0',
-        port=port,
-        debug=debug
-    )
