@@ -1,0 +1,96 @@
+{
+  "claim_id": "TC002",
+  "patient_name": "Priya Singh",
+  "employee_id": "N/A",
+  "decision": "REJECTED",
+  "reason": "Claim amount \u20b912000 exceeds per-claim limit \u20b95000",
+  "approved_amount": 0,
+  "total_claimed": 12000,
+  "rejection_reasons": [
+    "PER_CLAIM_EXCEEDED",
+    "LATE_SUBMISSION",
+    "COSMETIC_PROCEDURE"
+  ],
+  "confidence_score": 0.48,
+  "deductions": {
+    "copay": 0,
+    "rejected_items": 4000
+  },
+  "patient_payable": 4000,
+  "insurance_payable": 0,
+  "critical_issues": [
+    {
+      "code": "PER_CLAIM_EXCEEDED",
+      "severity": "critical",
+      "message": "Claim amount \u20b912000 exceeds per-claim limit \u20b95000"
+    },
+    {
+      "code": "LATE_SUBMISSION",
+      "severity": "critical",
+      "message": "Claim submitted 36 days after treatment, exceeds 30 day limit"
+    },
+    {
+      "code": "COSMETIC_PROCEDURE",
+      "severity": "critical",
+      "message": "Cosmetic procedure not covered: Teeth whitening"
+    }
+  ],
+  "warnings": [
+    {
+      "code": "DOCTOR_REG_INVALID",
+      "severity": "warning",
+      "message": "Doctor registration number not provided"
+    },
+    {
+      "code": "MISSING_DOCUMENTS",
+      "severity": "warning",
+      "message": "Hospital/clinic name not provided"
+    },
+    {
+      "code": "NOT_MEDICALLY_NECESSARY",
+      "severity": "warning",
+      "message": "No diagnosis provided to justify treatment"
+    }
+  ],
+  "item_breakdown": [
+    {
+      "description": "Root canal treatment",
+      "category": "dental",
+      "claimed_amount": 8000,
+      "approved_amount": 8000,
+      "rejected_amount": 0,
+      "copay_amount": 0,
+      "status": "approved",
+      "reason": "Covered dental procedure",
+      "sub_limit_exceeded": false
+    },
+    {
+      "description": "Teeth whitening",
+      "category": "dental",
+      "claimed_amount": 4000,
+      "approved_amount": 0,
+      "rejected_amount": 4000,
+      "copay_amount": 0,
+      "status": "rejected",
+      "reason": "Dental procedure not covered",
+      "sub_limit_exceeded": false
+    }
+  ],
+  "fraud_indicators": [
+    {
+      "type": "MISSING_INFO",
+      "severity": "medium",
+      "message": "Missing critical field: doctor_registration",
+      "score": 0.2
+    },
+    {
+      "type": "MISSING_INFO",
+      "severity": "medium",
+      "message": "Missing critical field: hospital_name",
+      "score": 0.2
+    }
+  ],
+  "next_steps": "This claim cannot be approved due to policy limit constraints.",
+  "adjudication_date": "2025-11-20 00:48:58",
+  "policy_id": "PLUM_OPD_2024"
+}

@@ -1,0 +1,21 @@
+"case_id": "TC003",
+      "case_name": "Limit Exceeded - Rejected",
+      "description": "Claim exceeds per-claim limit",
+      "input_data": {
+        "member_id": "EMP003",
+        "member_name": "Amit Verma",
+        "treatment_date": "2024-10-20",
+        "claim_amount": 7500,
+        "documents": {
+          "prescription": {
+            "doctor_name": "Dr. Gupta",
+            "doctor_reg": "DL/34567/2016",
+            "diagnosis": "Gastroenteritis",
+            "medicines_prescribed": ["Antibiotics", "Probiotics"]
+          },
+          "bill": {
+            "consultation_fee": 2000,
+            "medicines": 5500
+          }
+        }
+      }

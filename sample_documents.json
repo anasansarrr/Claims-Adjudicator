@@ -1,0 +1,695 @@
+[
+  {
+    "type": "medical_bill",
+    "data": {
+      "type": "medical_bill",
+      "bill_no": "BILL90937",
+      "hospital": {
+        "name": "Fortis Healthcare",
+        "addr": "321 Anna Nagar, Chennai 600040",
+        "gst": "33AABCF3456I1ZS",
+        "phone": "044-98765432"
+      },
+      "doctor": {
+        "name": "Dr. Priya Sharma",
+        "qual": "MBBS, DNB",
+        "reg": "MH/67890/2018",
+        "specialty": "Pediatrics"
+      },
+      "patient": {
+        "name": "Sneha Gupta",
+        "contact": "+91 8073170070"
+      },
+      "date": "20/11/2025",
+      "items": [
+        {
+          "desc": "Consultation Fee",
+          "amount": 1500
+        },
+        {
+          "desc": "Test - Blood Sugar",
+          "amount": 1200
+        },
+        {
+          "desc": "Test - LFT",
+          "amount": 500
+        },
+        {
+          "desc": "Test - CBC",
+          "amount": 500
+        }
+      ],
+      "subtotal": 3700,
+      "gst": 185.0,
+      "discount": 0,
+      "total": 3885.0,
+      "payment_mode": "Card"
+    }
+  },
+  {
+    "type": "lab_report",
+    "data": {
+      "type": "lab_report",
+      "report_id": "LAB626473",
+      "hospital": {
+        "name": "Apollo Clinic",
+        "addr": "789 Nehru Place, Delhi 110019",
+        "gst": "07AABCA9012H1ZR",
+        "phone": "011-23456789"
+      },
+      "doctor": {
+        "name": "Dr. Amit Patel",
+        "qual": "MBBS, MS",
+        "reg": "DL/34567/2020",
+        "specialty": "Orthopedics"
+      },
+      "patient": {
+        "name": "Ananya Singh",
+        "age": 60,
+        "sex": "M"
+      },
+      "date": "25/10/2025",
+      "collection_time": "9:45 AM",
+      "results": {
+        "Blood Sugar": [
+          {
+            "parameter": "Fasting Blood Sugar",
+            "value": 64.63,
+            "unit": "mg/dL",
+            "range": "70-100",
+            "status": "Low"
+          },
+          {
+            "parameter": "Post Prandial Blood Sugar",
+            "value": 97.71,
+            "unit": "mg/dL",
+            "range": "80-140",
+            "status": "Normal"
+          },
+          {
+            "parameter": "HbA1c",
+            "value": 4.48,
+            "unit": "%",
+            "range": "4.0-5.6",
+            "status": "Normal"
+          }
+        ],
+        "CBC": [
+          {
+            "parameter": "Hemoglobin",
+            "value": 13.62,
+            "unit": "g/dL",
+            "range": "12.0-17.0",
+            "status": "Normal"
+          },
+          {
+            "parameter": "WBC Count",
+            "value": 7315.98,
+            "unit": "/cumm",
+            "range": "4000-11000",
+            "status": "Normal"
+          },
+          {
+            "parameter": "RBC Count",
+            "value": 4.53,
+            "unit": "million/cumm",
+            "range": "4.5-5.5",
+            "status": "Normal"
+          },
+          {
+            "parameter": "Platelets",
+            "value": 207235.46,
+            "unit": "/cumm",
+            "range": "150000-450000",
+            "status": "Normal"
+          },
+          {
+            "parameter": "PCV",
+            "value": 50.0,
+            "unit": "%",
+            "range": "36-50",
+            "status": "Normal"
+          }
+        ],
+        "LFT": [
+          {
+            "parameter": "SGPT (ALT)",
+            "value": 29.04,
+            "unit": "U/L",
+            "range": "10-40",
+            "status": "Normal"
+          },
+          {
+            "parameter": "SGOT (AST)",
+            "value": 29.95,
+            "unit": "U/L",
+            "range": "10-40",
+            "status": "Normal"
+          },
+          {
+            "parameter": "Bilirubin Total",
+            "value": 0.76,
+            "unit": "mg/dL",
+            "range": "0.2-1.2",
+            "status": "Normal"
+          },
+          {
+            "parameter": "Alkaline Phosphatase",
+            "value": 133.46,
+            "unit": "U/L",
+            "range": "44-147",
+            "status": "Normal"
+          },
+          {
+            "parameter": "Total Protein",
+            "value": 4.95,
+            "unit": "g/dL",
+            "range": "6.0-8.3",
+            "status": "Low"
+          }
+        ]
+      },
+      "pathologist": "Dr. K. Rao"
+    }
+  },
+  {
+    "type": "pharmacy_bill",
+    "data": {
+      "type": "pharmacy_bill",
+      "bill_no": "PH30968",
+      "pharmacy": {
+        "name": "MedPlus Pharmacy",
+        "license": "KA-BLR-2345",
+        "gst": "29AABCM1234J1ZT"
+      },
+      "patient": "Karthik Nair",
+      "doctor": "Dr. Priya Sharma",
+      "date": "10/11/2025",
+      "items": [
+        {
+          "medicine": "Cap. Amoxicillin 500mg",
+          "batch": "HN361",
+          "expiry": "05/2026",
+          "qty": 20,
+          "mrp": 12.0,
+          "amount": 240.0
+        },
+        {
+          "medicine": "Tab. Paracetamol 650mg",
+          "batch": "IM612",
+          "expiry": "08/2027",
+          "qty": 14,
+          "mrp": 3.0,
+          "amount": 42.0
+        },
+        {
+          "medicine": "Tab. Ranitidine 150mg",
+          "batch": "IS282",
+          "expiry": "11/2028",
+          "qty": 15,
+          "mrp": 6.0,
+          "amount": 90.0
+        }
+      ],
+      "subtotal": 372.0,
+      "gst": 44.64,
+      "discount": 37.2,
+      "total": 379.44,
+      "payment_mode": "Card"
+    }
+  },
+  {
+    "type": "medical_bill",
+    "data": {
+      "type": "medical_bill",
+      "bill_no": "BILL71678",
+      "hospital": {
+        "name": "LifeLine Medical Center",
+        "addr": "456 Link Road, Mumbai 400050",
+        "gst": "27AABCL5678G1ZQ",
+        "phone": "022-87654321"
+      },
+      "doctor": {
+        "name": "Dr. Rajesh Kumar",
+        "qual": "MBBS, MD",
+        "reg": "KA/12345/2015",
+        "specialty": "General Medicine"
+      },
+      "patient": {
+        "name": "Vijay Kumar",
+        "contact": "+91 7778510648"
+      },
+      "date": "18/11/2025",
+      "items": [
+        {
+          "desc": "Consultation Fee",
+          "amount": 500
+        },
+        {
+          "desc": "Test - KFT",
+          "amount": 350
+        },
+        {
+          "desc": "Test - Lipid Profile",
+          "amount": 800
+        },
+        {
+          "desc": "Test - Blood Sugar",
+          "amount": 350
+        },
+        {
+          "desc": "Injection",
+          "amount": 50
+        }
+      ],
+      "subtotal": 2050,
+      "gst": 0,
+      "discount": 0,
+      "total": 2050,
+      "payment_mode": "Card"
+    }
+  },
+  {
+    "type": "lab_report",
+    "data": {
+      "type": "lab_report",
+      "report_id": "LAB308390",
+      "hospital": {
+        "name": "LifeLine Medical Center",
+        "addr": "456 Link Road, Mumbai 400050",
+        "gst": "27AABCL5678G1ZQ",
+        "phone": "022-87654321"
+      },
+      "doctor": {
+        "name": "Dr. Amit Patel",
+        "qual": "MBBS, MS",
+        "reg": "DL/34567/2020",
+        "specialty": "Orthopedics"
+      },
+      "patient": {
+        "name": "Ravi Shankar",
+        "age": 31,
+        "sex": "M"
+      },
+      "date": "07/11/2025",
+      "collection_time": "9:45 AM",
+      "results": {
+        "CBC": [
+          {
+            "parameter": "Hemoglobin",
+            "value": 14.48,
+            "unit": "g/dL",
+            "range": "12.0-17.0",
+            "status": "Normal"
+          },
+          {
+            "parameter": "WBC Count",
+            "value": 8498.03,
+            "unit": "/cumm",
+            "range": "4000-11000",
+            "status": "Normal"
+          },
+          {
+            "parameter": "RBC Count",
+            "value": 5.06,
+            "unit": "million/cumm",
+            "range": "4.5-5.5",
+            "status": "Normal"
+          },
+          {
+            "parameter": "Platelets",
+            "value": 283734.18,
+            "unit": "/cumm",
+            "range": "150000-450000",
+            "status": "Normal"
+          },
+          {
+            "parameter": "PCV",
+            "value": 42.51,
+            "unit": "%",
+            "range": "36-50",
+            "status": "Normal"
+          }
+        ]
+      },
+      "pathologist": "Dr. S. Mehta"
+    }
+  },
+  {
+    "type": "lab_report",
+    "data": {
+      "type": "lab_report",
+      "report_id": "LAB995627",
+      "hospital": {
+        "name": "Fortis Healthcare",
+        "addr": "321 Anna Nagar, Chennai 600040",
+        "gst": "33AABCF3456I1ZS",
+        "phone": "044-98765432"
+      },
+      "doctor": {
+        "name": "Dr. Sunita Reddy",
+        "qual": "MBBS, DM",
+        "reg": "TN/45678/2016",
+        "specialty": "Cardiology"
+      },
+      "patient": {
+        "name": "Deepak Joshi",
+        "age": 69,
+        "sex": "M"
+      },
+      "date": "19/11/2025",
+      "collection_time": "11:00 AM",
+      "results": {
+        "CBC": [
+          {
+            "parameter": "Hemoglobin",
+            "value": 14.2,
+            "unit": "g/dL",
+            "range": "12.0-17.0",
+            "status": "Normal"
+          },
+          {
+            "parameter": "WBC Count",
+            "value": 7525.47,
+            "unit": "/cumm",
+            "range": "4000-11000",
+            "status": "Normal"
+          },
+          {
+            "parameter": "RBC Count",
+            "value": 5.44,
+            "unit": "million/cumm",
+            "range": "4.5-5.5",
+            "status": "Normal"
+          },
+          {
+            "parameter": "Platelets",
+            "value": 443687.45,
+            "unit": "/cumm",
+            "range": "150000-450000",
+            "status": "Normal"
+          },
+          {
+            "parameter": "PCV",
+            "value": 45.48,
+            "unit": "%",
+            "range": "36-50",
+            "status": "Normal"
+          }
+        ],
+        "KFT": [
+          {
+            "parameter": "Blood Urea",
+            "value": 24.27,
+            "unit": "mg/dL",
+            "range": "15-40",
+            "status": "Normal"
+          },
+          {
+            "parameter": "Serum Creatinine",
+            "value": 1.1,
+            "unit": "mg/dL",
+            "range": "0.7-1.3",
+            "status": "Normal"
+          },
+          {
+            "parameter": "Uric Acid",
+            "value": 4.06,
+            "unit": "mg/dL",
+            "range": "3.5-7.2",
+            "status": "Normal"
+          },
+          {
+            "parameter": "Sodium",
+            "value": 140.11,
+            "unit": "mEq/L",
+            "range": "136-145",
+            "status": "Normal"
+          },
+          {
+            "parameter": "Potassium",
+            "value": 6.14,
+            "unit": "mEq/L",
+            "range": "3.5-5.1",
+            "status": "High"
+          }
+        ],
+        "Lipid Profile": [
+          {
+            "parameter": "Total Cholesterol",
+            "value": 176.27,
+            "unit": "mg/dL",
+            "range": "125-200",
+            "status": "Normal"
+          },
+          {
+            "parameter": "Triglycerides",
+            "value": 143.22,
+            "unit": "mg/dL",
+            "range": "50-150",
+            "status": "Normal"
+          },
+          {
+            "parameter": "HDL Cholesterol",
+            "value": 51.13,
+            "unit": "mg/dL",
+            "range": "40-60",
+            "status": "Normal"
+          },
+          {
+            "parameter": "LDL Cholesterol",
+            "value": 85.41,
+            "unit": "mg/dL",
+            "range": "60-130",
+            "status": "Normal"
+          },
+          {
+            "parameter": "VLDL",
+            "value": 14.14,
+            "unit": "mg/dL",
+            "range": "10-40",
+            "status": "Normal"
+          }
+        ]
+      },
+      "pathologist": "Dr. K. Rao"
+    }
+  },
+  {
+    "type": "prescription",
+    "data": {
+      "type": "prescription",
+      "hospital": {
+        "name": "Apollo Clinic",
+        "addr": "789 Nehru Place, Delhi 110019",
+        "gst": "07AABCA9012H1ZR",
+        "phone": "011-23456789"
+      },
+      "doctor": {
+        "name": "Dr. Rajesh Kumar",
+        "qual": "MBBS, MD",
+        "reg": "KA/12345/2015",
+        "specialty": "General Medicine"
+      },
+      "patient": {
+        "name": "Ananya Singh",
+        "age": 53,
+        "sex": "M"
+      },
+      "date": "08/11/2025",
+      "symptoms": [
+        "Cough"
+      ],
+      "diagnosis": "Upper Respiratory Tract Infection",
+      "prescriptions": [
+        {
+          "medicine": "Tab. Amlodipine 5mg",
+          "dosage": "1-1-1",
+          "duration": "7 days",
+          "instructions": "Before food"
+        },
+        {
+          "medicine": "Tab. Paracetamol 500mg",
+          "dosage": "SOS",
+          "duration": "3 days",
+          "instructions": "With food"
+        }
+      ],
+      "investigations": [
+        "CBC"
+      ],
+      "followup": "15/11/2025"
+    }
+  },
+  {
+    "type": "prescription",
+    "data": {
+      "type": "prescription",
+      "hospital": {
+        "name": "Apollo Clinic",
+        "addr": "789 Nehru Place, Delhi 110019",
+        "gst": "07AABCA9012H1ZR",
+        "phone": "011-23456789"
+      },
+      "doctor": {
+        "name": "Dr. Sunita Reddy",
+        "qual": "MBBS, DM",
+        "reg": "TN/45678/2016",
+        "specialty": "Cardiology"
+      },
+      "patient": {
+        "name": "Meera Patel",
+        "age": 43,
+        "sex": "M"
+      },
+      "date": "15/11/2025",
+      "symptoms": [
+        "Increased thirst"
+      ],
+      "diagnosis": "Type 2 Diabetes",
+      "prescriptions": [
+        {
+          "medicine": "Tab. Amlodipine 5mg",
+          "dosage": "1-0-0",
+          "duration": "30 days",
+          "instructions": ""
+        },
+        {
+          "medicine": "Tab. Azithromycin 500mg",
+          "dosage": "0-0-1",
+          "duration": "7 days",
+          "instructions": ""
+        },
+        {
+          "medicine": "Tab. Ondansetron 4mg",
+          "dosage": "0-0-1",
+          "duration": "10 days",
+          "instructions": "With food"
+        },
+        {
+          "medicine": "Tab. Paracetamol 500mg",
+          "dosage": "1-0-1",
+          "duration": "14 days",
+          "instructions": "Before food"
+        },
+        {
+          "medicine": "Tab. Paracetamol 650mg",
+          "dosage": "1-0-1",
+          "duration": "5 days",
+          "instructions": "After food"
+        }
+      ],
+      "investigations": [],
+      "followup": "15/12/2025"
+    }
+  },
+  {
+    "type": "medical_bill",
+    "data": {
+      "type": "medical_bill",
+      "bill_no": "BILL93611",
+      "hospital": {
+        "name": "Fortis Healthcare",
+        "addr": "321 Anna Nagar, Chennai 600040",
+        "gst": "33AABCF3456I1ZS",
+        "phone": "044-98765432"
+      },
+      "doctor": {
+        "name": "Dr. Sunita Reddy",
+        "qual": "MBBS, DM",
+        "reg": "TN/45678/2016",
+        "specialty": "Cardiology"
+      },
+      "patient": {
+        "name": "Meera Patel",
+        "contact": "+91 8929298392"
+      },
+      "date": "09/11/2025",
+      "items": [
+        {
+          "desc": "Consultation Fee",
+          "amount": 500
+        },
+        {
+          "desc": "Test - Blood Sugar",
+          "amount": 200
+        }
+      ],
+      "subtotal": 700,
+      "gst": 0,
+      "discount": 70.0,
+      "total": 630.0,
+      "payment_mode": "Cash"
+    }
+  },
+  {
+    "type": "pharmacy_bill",
+    "data": {
+      "type": "pharmacy_bill",
+      "bill_no": "PH94695",
+      "pharmacy": {
+        "name": "Netmeds Store",
+        "license": "DL-DEL-3456",
+        "gst": "07AABCN9012L1ZV"
+      },
+      "patient": "Mohammed Ali",
+      "doctor": "Dr. Sunita Reddy",
+      "date": "05/11/2025",
+      "items": [
+        {
+          "medicine": "Cap. Omeprazole 20mg",
+          "batch": "DO437",
+          "expiry": "07/2028",
+          "qty": 30,
+          "mrp": 8.0,
+          "amount": 240.0
+        },
+        {
+          "medicine": "Tab. Amlodipine 5mg",
+          "batch": "JN471",
+          "expiry": "02/2027",
+          "qty": 10,
+          "mrp": 4.5,
+          "amount": 45.0
+        },
+        {
+          "medicine": "Tab. Cetirizine 10mg",
+          "batch": "JP100",
+          "expiry": "08/2026",
+          "qty": 30,
+          "mrp": 3.5,
+          "amount": 105.0
+        },
+        {
+          "medicine": "Tab. Paracetamol 650mg",
+          "batch": "FT574",
+          "expiry": "09/2027",
+          "qty": 30,
+          "mrp": 3.0,
+          "amount": 90.0
+        },
+        {
+          "medicine": "Tab. Ibuprofen 400mg",
+          "batch": "IM928",
+          "expiry": "02/2027",
+          "qty": 15,
+          "mrp": 5.0,
+          "amount": 75.0
+        },
+        {
+          "medicine": "Tab. Paracetamol 500mg",
+          "batch": "CL484",
+          "expiry": "12/2026",
+          "qty": 20,
+          "mrp": 2.5,
+          "amount": 50.0
+        }
+      ],
+      "subtotal": 605.0,
+      "gst": 72.6,
+      "discount": 0.0,
+      "total": 677.6,
+      "payment_mode": "Card"
+    }
+  }
+]
