@@ -7,11 +7,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 import os
 import re
-# Render injects proxy variables that break httpx + OpenAI SDK
-for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
-    os.environ.pop(key, None)
-
-from openai import AzureOpenAI
+import google.generativeai as genai
 from PIL import Image
 import pytesseract
 import traceback
@@ -20,6 +16,7 @@ import fitz
 import uuid
 from db_manager import DatabaseManager
 
+# Initialize OCR once (English only)
 
 class ClaimProcessor:
     """
@@ -46,29 +43,24 @@ class ClaimProcessor:
             print(f"✗ Policy loading failed: {e}")
             raise
         
-        # 3. Load Azure OpenAI credentials from environment
-        self.azure_api_key = os.getenv('AZURE_OPENAI_API_KEY')
-        self.azure_api_base = os.getenv('AZURE_OPENAI_ENDPOINT')
-        self.azure_api_version = os.getenv('AZURE_OPENAI_API_VERSION')
-        self.model_deployment = os.getenv('AZURE_OPENAI_DEPLOYMENT')
+        # 3. Load Gemini API credentials from environment
+        self.gemini_api_key = os.getenv('GEMINI_API_KEY')
         
-        # Validate OpenAI credentials
-        if not all([self.azure_api_key, self.azure_api_base, self.model_deployment]):
-            raise ValueError("Azure OpenAI credentials not configured. Check .env file.")
+        # Validate Gemini credentials
+        if not self.gemini_api_key:
+            raise ValueError("Gemini API key not configured. Check .env file for GEMINI_API_KEY.")
         
         # 4. Initialize fraud indicators list
         self.fraud_indicators = []
         
-        # 5. Initialize Azure OpenAI client
+        # 5. Initialize Gemini client
         try:
-            self.client = AzureOpenAI(
-                api_key=self.azure_api_key,
-                api_version=self.azure_api_version,
-                azure_endpoint=self.azure_api_base
-            )
-            print("✓ Azure OpenAI client initialized")
+            genai.configure(api_key=self.gemini_api_key)
+            # Use gpt-3.5-turbo-1106 equivalent model
+            self.model = genai.GenerativeModel('gemini-2.0-flash')
+            print("✓ Gemini client initialized")
         except Exception as e:
-            print(f"✗ Azure OpenAI initialization failed: {e}")
+            print(f"✗ Gemini initialization failed: {e}")
             raise
     
     def _load_policy(self, policy_path: str) -> Dict:
@@ -188,7 +180,7 @@ class ClaimProcessor:
     def extract_claim_data(self, document_text: str, claim_date: str = None, 
                       doc_type: str = None) -> Dict[str, Any]:
         """
-        Extract structured claim data from document text using AI model.
+        Extract structured claim data from document text using Gemini AI model.
         
         Args:
             document_text: Extracted text from document
@@ -208,26 +200,22 @@ class ClaimProcessor:
             print(f"[EXTRACT_CLAIM_DATA] ERROR: {error_msg}")
             raise ValueError(error_msg)
         
-        # Build simple text-based message
+        # Build prompt
         prompt = self._get_extraction_prompt(doc_type)
-        messages = [
-            {
-                "role": "user",
-                "content": f"{prompt}\n\nDocument Type: {doc_type or 'unknown'}\n\nDocument content:\n{document_text}"
-            }
-        ]
+        full_prompt = f"{prompt}\n\nDocument Type: {doc_type or 'unknown'}\n\nDocument content:\n{document_text}"
         
-        print("[EXTRACT_CLAIM_DATA] Calling Azure OpenAI API...")
+        print("[EXTRACT_CLAIM_DATA] Calling Gemini API...")
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.model_deployment,
-                messages=messages,
-                temperature=0.1,
-                max_tokens=2000
+            response = self.model.generate_content(
+                full_prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.1,
+                    max_output_tokens=2000,
+                )
             )
             
-            extracted_text = response.choices[0].message.content
+            extracted_text = response.text
             
             # Parse JSON response
             if '```json' in extracted_text:
@@ -846,28 +834,27 @@ class ClaimProcessor:
         }
     
     def _llm_medical_necessity_check(self, claim_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Use LLM to evaluate medical necessity"""
+        """Use Gemini LLM to evaluate medical necessity"""
         prompt = self._get_medical_necessity_prompt(claim_data)
         
-        messages = [{"role": "user", "content": prompt}]
-        
-        response = self.client.chat.completions.create(
-            model=self.model_deployment,
-            messages=messages,
-            temperature=0.1,
-            max_tokens=1000
-        )
-        
-        assessment_text = response.choices[0].message.content
-        
         try:
+            response = self.model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.1,
+                    max_output_tokens=1000,
+                )
+            )
+            
+            assessment_text = response.text
+            
             if '```json' in assessment_text:
                 assessment_text = assessment_text.split('```json')[1].split('```')[0]
             elif '```' in assessment_text:
                 assessment_text = assessment_text.split('```')[1].split('```')[0]
             
             return json.loads(assessment_text.strip())
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, Exception):
             return {
                 'is_necessary': True,
                 'reason': 'Could not parse LLM response, defaulting to approval',
@@ -1113,12 +1100,11 @@ Return ONLY a JSON object with this structure:
     Item: "{description}"
     Covered: {covered_tests}
     """
-            rsp = self.client.chat.completions.create(
-                model=self.model_deployment,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0
+            response = self.model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(temperature=0)
             )
-            return "true" in rsp.choices[0].message.content.lower()
+            return "true" in response.text.lower()
         except:
             return False
 
@@ -1403,11 +1389,6 @@ Return ONLY a JSON object with this structure:
             approval_percentage = 0
         
         # ========== PARTIAL APPROVAL CONDITIONS ==========
-        # Partial approval when:
-        # 1. Some items rejected but some approved
-        # 2. Co-payment applies (patient pays portion)
-        # 3. Sub-limits exceeded (approved up to limit)
-        
         is_partial = False
         partial_reasons = []
         
@@ -1438,8 +1419,6 @@ Return ONLY a JSON object with this structure:
                 total_approved = per_claim_limit
                 is_partial = True
                 partial_reasons.append(f"Approved up to per-claim limit (₹{per_claim_limit:,.2f})")
-            
-            # Note: Annual limit check would need YTD data
         
         # ========== FINAL DECISION ==========
         
@@ -1464,6 +1443,7 @@ Return ONLY a JSON object with this structure:
                 "Unable to process claim",
                 "Please contact customer support for assistance with your claim."
             )
+    
     def _get_rejection_next_steps(self, rejection_code: str) -> str:
         """Get appropriate next steps based on rejection reason"""
         next_steps_map = {
@@ -1549,7 +1529,7 @@ Return ONLY a JSON object with this structure:
             # Detailed breakdowns
             'critical_issues': critical_issues,
             'warnings': warnings,
-            'item_breakdown': item_breakdown,  # Now reflects final decision
+            'item_breakdown': item_breakdown,
             'fraud_indicators': self.fraud_indicators,
             
             # Metadata
@@ -1561,10 +1541,7 @@ Return ONLY a JSON object with this structure:
                               critical_issues: List, warnings: List,
                               coverage_analysis: Dict, confidence: float,
                               approved_amount: float) -> Dict[str, Any]:
-        """
-        Build detailed reasoning explaining WHY the decision was made.
-        This provides transparency into the adjudication logic.
-        """
+        """Build detailed reasoning explaining WHY the decision was made"""
         
         reasoning = {
             'summary': '',
@@ -1715,33 +1692,21 @@ Return ONLY a JSON object with this structure:
     def _finalize_item_breakdown(self, item_analysis: List[Dict], 
                             final_decision: str, 
                             rejection_reason: str) -> List[Dict]:
-        """
-        Update item statuses to reflect the FINAL claim decision.
-
-        If overall claim is REJECTED, all items should show as rejected
-        even if they would have been eligible for coverage.
-        """
+        """Update item statuses to reflect the FINAL claim decision"""
         finalized_items = []
         
         for item in item_analysis:
             item_copy = item.copy()
             
             if final_decision == 'REJECTED':
-                # 🔒 Hard override: nothing can be approved if claim-level is rejected
                 claimed = item_copy.get('claimed_amount', 0) or 0
-
-                # Override coverage-facing fields
                 item_copy['status'] = 'rejected'
                 item_copy['approved_amount'] = 0
                 item_copy['copay_amount'] = 0
                 item_copy['rejected_amount'] = claimed
-
-                # Final decision fields
                 item_copy['final_status'] = 'rejected'
                 item_copy['final_approved_amount'] = 0
                 item_copy['final_reason'] = f"Claim rejected: {rejection_reason}"
-
-                # Keep coverage eligibility only as debug info
                 item_copy['coverage_eligible'] = False
                 item_copy['coverage_analysis'] = "Not payable due to claim-level rejection"
             
