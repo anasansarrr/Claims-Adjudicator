@@ -57,7 +57,14 @@ class ClaimProcessor:
         try:
             genai.configure(api_key=self.gemini_api_key)
             # Use gpt-3.5-turbo-1106 equivalent model
-            self.model = genai.GenerativeModel('gemini-2.0-flash')
+            self.model = genai.GenerativeModel(
+                'gemini-2.0-flash',
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.1,  # Keep low for consistency
+                    top_p=0.95,       # Add this for better quality
+                    top_k=40,         # Add this for better quality
+                )
+            )
             print("✓ Gemini client initialized")
         except Exception as e:
             print(f"✗ Gemini initialization failed: {e}")
@@ -257,8 +264,16 @@ class ClaimProcessor:
     def _get_extraction_prompt(self, doc_type: str = None) -> str:
         """Generate prompt for AI to extract claim data based on document type"""
         
-        base_prompt = """Extract medical claim information from this document and return ONLY a JSON object."""
-        
+        base_prompt = """Extract medical claim information from this document and return ONLY a JSON object.
+
+        CRITICAL INSTRUCTIONS:
+        1. Extract EXACT values as they appear - do not infer or assume
+        2. For diagnosis: Extract the COMPLETE diagnosis text including qualifiers like "viral", "bacterial", "acute", "chronic"
+        3. For symptoms: List ALL symptoms mentioned by the patient
+        4. For test results: If CBC or other labs present, note if values are normal, high, or low
+        5. For amounts: Extract as numbers only (e.g., 500.00 not "Rs. 500")
+        6. For categories: Choose the MOST SPECIFIC category that matches the service
+        """
         if doc_type == 'prescription':
             specific_fields = """
     Focus on extracting:
@@ -764,14 +779,47 @@ class ClaimProcessor:
         issues = []
         is_necessary = True
         
-        diagnosis = claim_data.get('diagnosis', '')
+        diagnosis = claim_data.get('diagnosis', '').lower()
         items = claim_data.get('items', [])
+        test_results = claim_data.get('test_results', '').lower()
         
         if not diagnosis:
             issues.append({
                 'code': 'NOT_MEDICALLY_NECESSARY',
                 'severity': 'warning',
                 'message': "No diagnosis provided to justify treatment"
+            })
+        
+        # ✅ ADD THIS: Rule-based antibiotic check for viral infections
+        viral_keywords = ['viral', 'uri', 'upper respiratory infection', 'common cold', 'viral fever']
+        antibiotic_keywords = ['azithromycin', 'amoxicillin', 'ciprofloxacin', 'antibiotic', 
+                            'azee', 'augmentin', 'cipla']
+        
+        is_viral = any(keyword in diagnosis for keyword in viral_keywords)
+        
+        # Check if antibiotics prescribed
+        antibiotics_found = []
+        for item in items:
+            description = item.get('description', '').lower()
+            if any(ab in description for ab in antibiotic_keywords):
+                antibiotics_found.append(item['description'])
+        
+        # ✅ ADD THIS: Check CBC results for bacterial vs viral infection
+        has_bacterial_evidence = False
+        if test_results:
+            # Look for elevated WBC or neutrophils indicating bacterial infection
+            if 'wbc' in test_results or 'neutrophil' in test_results:
+                # This is simplified - you might want more sophisticated parsing
+                if any(word in test_results for word in ['high', 'elevated', 'increased']):
+                    has_bacterial_evidence = True
+        
+        # ✅ ADD THIS: Flag inappropriate antibiotic use
+        if is_viral and antibiotics_found and not has_bacterial_evidence:
+            is_necessary = False
+            issues.append({
+                'code': 'NOT_MEDICALLY_NECESSARY',
+                'severity': 'critical',
+                'message': f"Antibiotics ({', '.join(antibiotics_found)}) prescribed for viral infection without bacterial evidence. This is inappropriate and contributes to antibiotic resistance."
             })
         
         # Get exclusion keywords from policy
@@ -810,15 +858,25 @@ class ClaimProcessor:
         if diagnosis and items:
             llm_assessment = self._llm_medical_necessity_check(claim_data)
             
+            # ✅ ADD THIS: Override LLM if rule-based check failed
+            if not is_necessary:
+                llm_assessment['is_necessary'] = False
+                if not llm_assessment.get('warnings'):
+                    llm_assessment['warnings'] = []
+                llm_assessment['warnings'].append(
+                    "Rule-based check detected inappropriate antibiotic prescription for viral infection"
+                )
+            
             if not llm_assessment['is_necessary']:
-                issues.append({
-                    'code': 'NOT_MEDICALLY_NECESSARY',
-                    'severity': 'critical',
-                    'message': llm_assessment['reason']
-                })
+                if not any(i['code'] == 'NOT_MEDICALLY_NECESSARY' for i in issues):
+                    issues.append({
+                        'code': 'NOT_MEDICALLY_NECESSARY',
+                        'severity': 'critical',
+                        'message': llm_assessment['reason']
+                    })
                 is_necessary = False
             
-            # Add LLM warnings if any
+            # Add LLM warnings
             if llm_assessment.get('warnings'):
                 for warning in llm_assessment['warnings']:
                     issues.append({
@@ -842,23 +900,40 @@ class ClaimProcessor:
                 prompt,
                 generation_config=genai.types.GenerationConfig(
                     temperature=0.1,
+                    top_p=0.95,
+                    top_k=40,
                     max_output_tokens=1000,
                 )
             )
             
             assessment_text = response.text
             
+            # Clean up response
             if '```json' in assessment_text:
                 assessment_text = assessment_text.split('```json')[1].split('```')[0]
             elif '```' in assessment_text:
                 assessment_text = assessment_text.split('```')[1].split('```')[0]
             
-            return json.loads(assessment_text.strip())
-        except (json.JSONDecodeError, Exception):
+            assessment = json.loads(assessment_text.strip())
+            
+            # ✅ ADD THIS: Validate assessment structure
+            if 'is_necessary' not in assessment:
+                assessment['is_necessary'] = True
+            if 'warnings' not in assessment:
+                assessment['warnings'] = []
+            if 'reason' not in assessment:
+                assessment['reason'] = 'Assessment completed'
+                
+            return assessment
+            
+        except (json.JSONDecodeError, Exception) as e:
+            print(f"[LLM_MEDICAL_NECESSITY] Error: {e}")
+            # ✅ IMPROVED: Return more conservative default
             return {
-                'is_necessary': True,
-                'reason': 'Could not parse LLM response, defaulting to approval',
-                'warnings': []
+                'is_necessary': True,  # Conservative default
+                'reason': 'Could not complete automated assessment, flagging for manual review',
+                'warnings': ['Automated assessment failed - requires manual review'],
+                'confidence': 0.3  # Low confidence to trigger manual review
             }
     
     def _get_medical_necessity_prompt(self, claim_data: Dict[str, Any]) -> str:
@@ -899,59 +974,66 @@ Return ONLY a JSON object with this structure:
     
     # ==================== FRAUD DETECTION ====================
     
-    def detect_fraud_indicators(self, claim_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Detect potential fraud indicators"""
-        indicators = []
-        fraud_score = 0.0
+    def _get_medical_necessity_prompt(self, claim_data: Dict[str, Any]) -> str:
+        """Generate prompt for LLM medical necessity evaluation"""
+        return f"""You are a medical claim reviewer with expertise in clinical guidelines. Evaluate if the treatment was medically necessary.
+
+    CLAIM DETAILS:
+    - Diagnosis: {claim_data.get('diagnosis', 'Not provided')}
+    - Symptoms: {claim_data.get('symptoms', 'Not provided')}
+    - Patient Age: {claim_data.get('patient_age', 'Not provided')}
+    - Patient Gender: {claim_data.get('patient_gender', 'Not provided')}
+    - Emergency Treatment: {claim_data.get('emergency_treatment', False)}
+
+    TREATMENTS/SERVICES PROVIDED:
+    {json.dumps(claim_data.get('items', []), indent=2)}
+
+    PRESCRIPTION DETAILS:
+    {claim_data.get('prescription_details', 'Not provided')}
+
+    TEST RESULTS (if available):
+    {claim_data.get('test_results', 'Not provided')}
+
+    EVALUATION CRITERIA - Answer each question:
+
+    1. DIAGNOSIS APPROPRIATENESS:
+    - Does the diagnosis justify all treatments provided?
+    - Are there any treatments that don't align with the diagnosis?
+
+    2. MEDICATION APPROPRIATENESS:
+    - For VIRAL infections (viral fever, URI, common cold): Antibiotics are NOT indicated
+    - For BACTERIAL infections: Antibiotics may be appropriate with supporting evidence
+    - Are prescribed medications appropriate for the confirmed/suspected diagnosis?
+    - Check CBC results: High WBC with neutrophilia suggests bacterial; normal WBC suggests viral
+
+    3. DIAGNOSTIC TEST RELEVANCE:
+    - Are diagnostic tests relevant and necessary for the diagnosis?
+    - Do test results support the prescribed treatment?
+
+    4. PROTOCOL COMPLIANCE:
+    - Does treatment follow standard medical protocols?
+    - Are there any red flags for unnecessary procedures?
+
+    SPECIFIC CHECKS:
+    - If diagnosis contains "viral" AND antibiotics prescribed → Flag as inappropriate
+    - If CBC shows normal ranges AND antibiotics prescribed → Question necessity
+    - If cough syrup prescribed without documented cough symptoms → Question necessity
+
+    IMPORTANT: Be strict about antibiotic use. Antibiotics for viral infections contribute to resistance and are medically inappropriate.
+
+    Return ONLY a JSON object:
+    {{
+    "is_necessary": true/false,
+    "reason": "Detailed explanation focusing on appropriateness of ALL treatments, especially antibiotics",
+    "warnings": [
+        "List specific concerns, e.g., 'Azithromycin prescribed for viral infection'",
+        "Another concern if applicable"
+    ],
+    "confidence": 0.0-1.0
+    }}
+
+    Be thorough and critical in your assessment."""
         
-        fraud_config = self.policy.get('fraud_detection', {})
-        high_value_threshold = fraud_config.get('high_value_threshold', 25000)
-        
-        # 1. Unusually high amounts
-        total_amount = claim_data.get('total_amount', 0)
-        if total_amount > high_value_threshold:
-            score = min(0.3, (total_amount / high_value_threshold) * 0.2)
-            indicators.append({
-                'type': 'HIGH_VALUE',
-                'severity': 'medium',
-                'message': f"High-value claim: ₹{total_amount}",
-                'score': score
-            })
-            fraud_score += score
-        
-        # 2. Missing critical information
-        critical_fields = fraud_config.get('critical_fields', ['doctor_registration', 'hospital_name'])
-        for field in critical_fields:
-            if not claim_data.get(field):
-                indicators.append({
-                    'type': 'MISSING_INFO',
-                    'severity': 'medium',
-                    'message': f"Missing critical field: {field}",
-                    'score': 0.2
-                })
-                fraud_score += 0.2
-        
-        # 3. Suspicious patterns in amounts
-        items = claim_data.get('items', [])
-        if len(items) > 2:
-            round_numbers = sum(1 for item in items if item['amount'] % 1000 == 0)
-            if round_numbers == len(items):
-                indicators.append({
-                    'type': 'SUSPICIOUS_AMOUNTS',
-                    'severity': 'low',
-                    'message': "All amounts are round numbers",
-                    'score': 0.1
-                })
-                fraud_score += 0.1
-        
-        self.fraud_indicators = indicators
-        fraud_threshold = fraud_config.get('manual_review_threshold', 0.5)
-        
-        return {
-            'fraud_score': min(fraud_score, 1.0),
-            'indicators': indicators,
-            'requires_manual_review': fraud_score > fraud_threshold
-        }
     
     # ==================== COVERAGE ANALYSIS ====================
     
@@ -1664,7 +1746,116 @@ Return ONLY a JSON object with this structure:
         }
         
         return reasoning
-    
+    # ==================== FRAUD DETECTION ====================
+
+    def detect_fraud_indicators(self, claim_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Detect potential fraud indicators"""
+        indicators = []
+        fraud_score = 0.0
+        
+        fraud_config = self.policy.get('fraud_detection', {})
+        high_value_threshold = fraud_config.get('high_value_threshold', 25000)
+        
+        # 1. Unusually high amounts
+        total_amount = claim_data.get('total_amount', 0)
+        if total_amount > high_value_threshold:
+            score = min(0.3, (total_amount / high_value_threshold) * 0.2)
+            indicators.append({
+                'type': 'HIGH_VALUE',
+                'severity': 'medium',
+                'message': f"High-value claim: ₹{total_amount}",
+                'score': score
+            })
+            fraud_score += score
+        
+        # 2. Missing critical information
+        critical_fields = fraud_config.get('critical_fields', ['doctor_registration', 'hospital_name'])
+        for field in critical_fields:
+            if not claim_data.get(field):
+                indicators.append({
+                    'type': 'MISSING_INFO',
+                    'severity': 'medium',
+                    'message': f"Missing critical field: {field}",
+                    'score': 0.2
+                })
+                fraud_score += 0.2
+        
+        # 3. Suspicious patterns in amounts
+        items = claim_data.get('items', [])
+        if len(items) > 2:
+            round_numbers = sum(1 for item in items if item.get('amount', 0) % 1000 == 0)
+            if round_numbers == len(items):
+                indicators.append({
+                    'type': 'SUSPICIOUS_AMOUNTS',
+                    'severity': 'low',
+                    'message': "All amounts are round numbers",
+                    'score': 0.1
+                })
+                fraud_score += 0.1
+        
+        # 4. Date inconsistencies
+        claim_date = claim_data.get('claim_date')
+        treatment_date = claim_data.get('treatment_date')
+        
+        if claim_date and treatment_date:
+            try:
+                c_date = datetime.strptime(claim_date, '%Y-%m-%d')
+                t_date = datetime.strptime(treatment_date, '%Y-%m-%d')
+                
+                # Claim submitted before treatment (red flag)
+                if c_date < t_date:
+                    indicators.append({
+                        'type': 'DATE_ANOMALY',
+                        'severity': 'high',
+                        'message': f"Claim date ({claim_date}) before treatment date ({treatment_date})",
+                        'score': 0.3
+                    })
+                    fraud_score += 0.3
+                
+                # Very old claim (suspicious)
+                days_diff = (c_date - t_date).days
+                if days_diff > 180:  # More than 6 months
+                    indicators.append({
+                        'type': 'LATE_CLAIM',
+                        'severity': 'medium',
+                        'message': f"Claim submitted {days_diff} days after treatment",
+                        'score': 0.15
+                    })
+                    fraud_score += 0.15
+            except ValueError:
+                pass
+        
+        # 5. Duplicate or similar claims check (if you have claim history)
+        # This would require database query - placeholder for now
+        
+        # 6. Unusual item combinations
+        item_descriptions = [item.get('description', '').lower() for item in items]
+        
+        # Check for unrelated services in same claim
+        has_dental = any('dental' in desc or 'tooth' in desc for desc in item_descriptions)
+        has_vision = any('eye' in desc or 'vision' in desc or 'glasses' in desc for desc in item_descriptions)
+        has_general = any('consultation' in desc or 'fever' in desc for desc in item_descriptions)
+        
+        if sum([has_dental, has_vision, has_general]) > 1:
+            indicators.append({
+                'type': 'UNUSUAL_COMBINATION',
+                'severity': 'low',
+                'message': "Unrelated services claimed together (dental + vision + general)",
+                'score': 0.1
+            })
+            fraud_score += 0.1
+        
+        # Store indicators in instance variable for later use
+        self.fraud_indicators = indicators
+        
+        # Determine if manual review needed
+        fraud_threshold = fraud_config.get('manual_review_threshold', 0.5)
+        
+        return {
+            'fraud_score': min(fraud_score, 1.0),
+            'indicators': indicators,
+            'requires_manual_review': fraud_score > fraud_threshold
+        }
     def _get_issue_explanation(self, issue_code: str) -> str:
         """Get human-readable explanation for issue codes"""
         explanations = {
